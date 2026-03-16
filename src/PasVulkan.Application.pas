@@ -1766,7 +1766,7 @@ type EpvApplication=class(Exception)
        fFramePacingSleepWithDriftCompensation:TpvHighResolutionTimerSleepWithDriftCompensation;
        fFramePacingPresentTimingRefreshDuration:TpvUInt64; // from VK_EXT_present_timing, in nanoseconds
        fFramePacingPresentTimingAvailable:boolean;
-       fFramePacingEffectiveInterval:TpvInt64; // computed pacing interval, consumed by FrameRateLimiter
+       fFramePacingEffectiveInterval:TpvInt64; // computed pacing interval, consumed by FramePacingAndFrameRateLimiter
 
        fFrameTimesHistoryDeltaTimes:array[0..FrameTimesHistorySize-1] of TpvDouble;
        fFrameTimesHistoryTimePoints:array[0..FrameTimesHistorySize-1] of TpvHighResolutionTime;
@@ -2026,7 +2026,7 @@ type EpvApplication=class(Exception)
 
        procedure UpdateFrameTimesHistory;
 
-       procedure FrameRateLimiter;
+       procedure FramePacingAndFrameRateLimiter;
 
        procedure UpdateJobFunction(const aJob:PPasMPJob;const aThreadIndex:TPasMPInt32);
        procedure DrawJobFunction(const aJob:PPasMPJob;const aThreadIndex:TPasMPInt32);
@@ -11294,10 +11294,10 @@ begin
 
   end;
 
-  /////////////////////////////////////////////////////////////////////////
-  // Frame pacing: estimate display refresh interval and publish it to   //
-  // FrameRateLimiter which does the actual sleep at frame end.          //
-  /////////////////////////////////////////////////////////////////////////
+  //////////////////////////////////////////////////////////////////////////////
+  // Frame pacing: estimate display refresh interval and publish it to        //
+  // FramePacingAndFrameRateLimiter which does the actual sleep at frame end. //
+  //////////////////////////////////////////////////////////////////////////////
 
   if fBlocking and (fFramePacingMode<>TpvApplicationFramePacingMode.None) then begin
 
@@ -12463,7 +12463,7 @@ begin
 
 end;
    
-procedure TpvApplication.FrameRateLimiter;
+procedure TpvApplication.FramePacingAndFrameRateLimiter;
 var LastTime,NowTime,FrameTime,TargetInterval,SleepDuration,
     LateAmount,Skipped:TpvHighResolutionTime;
 begin
@@ -12577,7 +12577,7 @@ begin
 
 end;
 
-{procedure TpvApplication.FrameRateLimiter;
+{procedure TpvApplication.FramePacingAndFrameRateLimiter;
 var NowTime,Interval:TpvHighResolutionTime;
 begin
  NowTime:=fHighResolutionTimer.GetTime;
@@ -14072,7 +14072,7 @@ begin
 
      inc(fFrameCounter);
 
-     FrameRateLimiter;
+     FramePacingAndFrameRateLimiter;
 
      inc(fSwapChainImageCounterIndex);
      if fSwapChainImageCounterIndex>=fCountSwapChainImages then begin
@@ -14195,7 +14195,7 @@ begin
           end;
          end;
          inc(fFrameCounter);
-         FrameRateLimiter;
+         FramePacingAndFrameRateLimiter;
         end;
 
        finally
@@ -14309,7 +14309,7 @@ begin
 
         inc(fFrameCounter);
 
-        FrameRateLimiter;
+        FramePacingAndFrameRateLimiter;
 
        end;
 
