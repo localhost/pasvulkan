@@ -11325,59 +11325,66 @@ begin
 
    end else if fFramePacingMode in [TpvApplicationFramePacingMode.Auto,TpvApplicationFramePacingMode.MonitorRefreshRate,TpvApplicationFramePacingMode.PresentIntervalEstimation] then begin
 
-    // Try monitor refresh rate first (unless explicitly PresentIntervalEstimation-only)
-    if fFramePacingMode<>TpvApplicationFramePacingMode.PresentIntervalEstimation then begin
-     RefreshRate:=GetNativeRefreshRate;
-     if RefreshRate>=1.0 then begin
-      fFramePacingEffectiveInterval:=fHighResolutionTimer.FromFloatSeconds(1.0/RefreshRate);
-     end else begin
-      RefreshRate:=0.0;
-     end;
-    end else begin
-     RefreshRate:=0.0;
-    end;
-
-    // Fall back to present history estimation when monitor query failed or not requested
-    if (RefreshRate<1.0) and
-       (fFramePacingMode in [TpvApplicationFramePacingMode.Auto,TpvApplicationFramePacingMode.PresentIntervalEstimation]) and
-       (fFramePacingHistoryCount>=4) then begin
-
-     // Software estimation path: compute median of recent present-to-present intervals
-     // to robustly estimate the display refresh interval.
-     PacingCount:=fFramePacingHistoryCount;
-     for PacingIndex:=0 to PacingCount-1 do begin
-      PacingSorted[PacingIndex]:=fFramePacingHistory[(fFramePacingHistoryIndex+FramePacingHistorySize-PacingCount+PacingIndex) and FramePacingHistoryMask];
-     end;
-     // Simple insertion sort for small array (max 16 elements)
-     for PacingIndex:=1 to PacingCount-1 do begin
-      PacingTemp:=PacingSorted[PacingIndex];
-      PacingSortIndex:=PacingIndex;
-      while (PacingSortIndex>0) and (PacingSorted[PacingSortIndex-1]>PacingTemp) do begin
-       PacingSorted[PacingSortIndex]:=PacingSorted[PacingSortIndex-1];
-       dec(PacingSortIndex);
+    repeat
+     
+     // Try monitor refresh rate first (unless explicitly PresentIntervalEstimation-only)
+     if fFramePacingMode in [TpvApplicationFramePacingMode.Auto,TpvApplicationFramePacingMode.MonitorRefreshRate] then begin
+      RefreshRate:=GetNativeRefreshRate;
+      if RefreshRate>=1.0 then begin
+       fFramePacingEffectiveInterval:=fHighResolutionTimer.FromFloatSeconds(1.0/RefreshRate);
+       break;       
       end;
-      PacingSorted[PacingSortIndex]:=PacingTemp;
      end;
-     // Use median (middle quartile range average for robustness)
-     PacingSum:=0;
-     for PacingIndex:=(PacingCount shr 2) to (PacingCount-(PacingCount shr 2))-1 do begin
-      PacingSum:=PacingSum+PacingSorted[PacingIndex];
-     end;
-     PacingInterval:=PacingSum div (PacingCount-(2*(PacingCount shr 2)));
 
-     // Sanity check: only publish the estimated interval when it looks like
-     // a realistic display refresh rate (between ~8ms/125Hz and ~50ms/20Hz).
-     if (PacingInterval>0) and
-        (PacingInterval>=fHighResolutionTimer.FromMilliseconds(8)) and
-        (PacingInterval<=fHighResolutionTimer.FromMilliseconds(50)) then begin
-      fFramePacingEffectiveInterval:=PacingInterval;
+     // Fall back to present history estimation when monitor query failed or not requested
+     if (fFramePacingMode in [TpvApplicationFramePacingMode.Auto,TpvApplicationFramePacingMode.PresentIntervalEstimation]) and
+        (fFramePacingHistoryCount>=4) then begin
+
+      // Software estimation path: compute median of recent present-to-present intervals
+      // to robustly estimate the display refresh interval.
+      PacingCount:=fFramePacingHistoryCount;
+      for PacingIndex:=0 to PacingCount-1 do begin
+       PacingSorted[PacingIndex]:=fFramePacingHistory[(fFramePacingHistoryIndex+FramePacingHistorySize-PacingCount+PacingIndex) and FramePacingHistoryMask];
+      end;
+      // Simple insertion sort for small array (max 16 elements)
+      for PacingIndex:=1 to PacingCount-1 do begin
+       PacingTemp:=PacingSorted[PacingIndex];
+       PacingSortIndex:=PacingIndex;
+       while (PacingSortIndex>0) and (PacingSorted[PacingSortIndex-1]>PacingTemp) do begin
+        PacingSorted[PacingSortIndex]:=PacingSorted[PacingSortIndex-1];
+        dec(PacingSortIndex);
+       end;
+       PacingSorted[PacingSortIndex]:=PacingTemp;
+      end;
+      // Use median (middle quartile range average for robustness)
+      PacingSum:=0;
+      for PacingIndex:=(PacingCount shr 2) to (PacingCount-(PacingCount shr 2))-1 do begin
+       PacingSum:=PacingSum+PacingSorted[PacingIndex];
+      end;
+      PacingInterval:=PacingSum div (PacingCount-(2*(PacingCount shr 2)));
+
+      // Sanity check: only publish the estimated interval when it looks like
+      // a realistic display refresh rate (between ~8ms/125Hz and ~50ms/20Hz).
+      if (PacingInterval>0) and
+         (PacingInterval>=fHighResolutionTimer.FromMilliseconds(8)) and
+         (PacingInterval<=fHighResolutionTimer.FromMilliseconds(50)) then begin
+       fFramePacingEffectiveInterval:=PacingInterval;
+      end else begin
+       fFramePacingEffectiveInterval:=0;
+      end;
+
      end else begin
-      fFramePacingEffectiveInterval:=0;
+
+      // Assume a default refresh rate of 60Hz when no better information is available, to avoid running with an uncapped frame rate and high CPU/GPU load.
+      fFramePacingEffectiveInterval:=fHighResolutionTimer.FromFloatSeconds(1.0/60.0));
+
      end;
 
-    end;
+     break;
 
-   end;
+    until false; 
+
+   end; 
 
    fFramePacingLastPresentTime:=PacingNow;
 
