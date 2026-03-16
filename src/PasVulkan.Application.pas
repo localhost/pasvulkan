@@ -9298,6 +9298,10 @@ begin
   result:=0.0;
  end;
 end;
+{$elseif defined(Windows) and not defined(PasVulkanHeadless)}
+begin // TODO
+ result:=0.0;
+end;
 {$else}
 begin
  result:=0.0;
