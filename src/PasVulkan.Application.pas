@@ -11376,7 +11376,7 @@ begin
      end else begin
 
       // Assume a default refresh rate of 60Hz when no better information is available, to avoid running with an uncapped frame rate and high CPU/GPU load.
-      fFramePacingEffectiveInterval:=fHighResolutionTimer.FromFloatSeconds(1.0/60.0));
+      fFramePacingEffectiveInterval:=fHighResolutionTimer.FromFloatSeconds(1.0/60.0);
 
      end;
 
