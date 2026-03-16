@@ -1369,8 +1369,9 @@ type EpvApplication=class(Exception)
       (
        None=0,
        Auto=1,
-       Software=2,
-       VulkanPresentTiming=3
+       MonitorRefreshRate=2,
+       PresentIntervalEstimation=3,
+       VulkanPresentTiming=4
       );
 
      PpvApplicationFramePacingStrategy=^TpvApplicationFramePacingStrategy;
@@ -11312,8 +11313,8 @@ begin
    end;
 
    // Determine the effective refresh interval:
-   // Prefer VK_EXT_present_timing hardware data when available,
-   // otherwise fall back to software estimation from present history.
+   // Priority: VulkanPresentTiming > MonitorRefreshRate > PresentIntervalEstimation
+   // Auto mode tries all three in order, falling through on failure.
    PacingInterval:=0;
 
    if (fFramePacingMode in [TpvApplicationFramePacingMode.Auto,TpvApplicationFramePacingMode.VulkanPresentTiming]) and
@@ -11322,15 +11323,24 @@ begin
     // VK_EXT_present_timing path: use the actual refresh duration reported by the driver
     PacingInterval:=fHighResolutionTimer.FromNanoseconds(fFramePacingPresentTimingRefreshDuration);
 
-   end else if fFramePacingMode in [TpvApplicationFramePacingMode.Auto,TpvApplicationFramePacingMode.Software] then begin
+   end else if fFramePacingMode in [TpvApplicationFramePacingMode.Auto,TpvApplicationFramePacingMode.MonitorRefreshRate,TpvApplicationFramePacingMode.PresentIntervalEstimation] then begin
 
-    RefreshRate:=GetNativeRefreshRate;
+    // Try monitor refresh rate first (unless explicitly PresentIntervalEstimation-only)
+    if fFramePacingMode<>TpvApplicationFramePacingMode.PresentIntervalEstimation then begin
+     RefreshRate:=GetNativeRefreshRate;
+     if RefreshRate>=1.0 then begin
+      fFramePacingEffectiveInterval:=fHighResolutionTimer.FromFloatSeconds(1.0/RefreshRate);
+     end else begin
+      RefreshRate:=0.0;
+     end;
+    end else begin
+     RefreshRate:=0.0;
+    end;
 
-    if RefreshRate>=1.0 then begin
-
-     fFramePacingEffectiveInterval:=fHighResolutionTimer.FromFloatSeconds(1.0/RefreshRate);
-
-    end else if fFramePacingHistoryCount>=4 then begin
+    // Fall back to present history estimation when monitor query failed or not requested
+    if (RefreshRate<1.0) and
+       (fFramePacingMode in [TpvApplicationFramePacingMode.Auto,TpvApplicationFramePacingMode.PresentIntervalEstimation]) and
+       (fFramePacingHistoryCount>=4) then begin
 
      // Software estimation path: compute median of recent present-to-present intervals
      // to robustly estimate the display refresh interval.
