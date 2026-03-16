@@ -1370,7 +1370,8 @@ type EpvApplication=class(Exception)
        None=0,
        Auto=1,
        Software=2,
-       VulkanPresentTiming=3
+       VulkanPresentTiming=3,
+       AbsoluteTimeRaster=4
       );
 
      TpvApplicationProcessingMode=
@@ -11305,13 +11306,13 @@ begin
    // otherwise fall back to software estimation from present history.
    PacingInterval:=0;
 
-   if (fFramePacingMode in [TpvApplicationFramePacingMode.Auto,TpvApplicationFramePacingMode.VulkanPresentTiming]) and
+   if (fFramePacingMode in [TpvApplicationFramePacingMode.Auto,TpvApplicationFramePacingMode.VulkanPresentTiming,TpvApplicationFramePacingMode.AbsoluteTimeRaster]) and
       fFramePacingPresentTimingAvailable and (fFramePacingPresentTimingRefreshDuration>0) then begin
 
     // VK_EXT_present_timing path: use the actual refresh duration reported by the driver
     PacingInterval:=fHighResolutionTimer.FromNanoseconds(fFramePacingPresentTimingRefreshDuration);
 
-   end else if fFramePacingMode in [TpvApplicationFramePacingMode.Auto,TpvApplicationFramePacingMode.Software] then begin
+   end else if fFramePacingMode in [TpvApplicationFramePacingMode.Auto,TpvApplicationFramePacingMode.Software,TpvApplicationFramePacingMode.AbsoluteTimeRaster] then begin
 
     RefreshRate:=GetNativeRefreshRate;
 
@@ -12436,7 +12437,8 @@ begin
 end;
    
 procedure TpvApplication.FrameRateLimiter;
-var LastTime,NowTime,FrameTime,TargetInterval,SleepDuration:TpvHighResolutionTime;
+var LastTime,NowTime,FrameTime,TargetInterval,SleepDuration,
+    LateAmount,Skipped:TpvHighResolutionTime;
 begin
 
  if fFrameRateLimiterLastTime=0 then begin
@@ -12470,7 +12472,42 @@ begin
 
  end;
 
- if TargetInterval>0 then begin
+ if (fFramePacingMode=TpvApplicationFramePacingMode.AbsoluteTimeRaster) and (TargetInterval>0) then begin
+
+  // Absolute time raster pacing: advance a fixed deadline by the target interval each frame,
+  // sleep until the deadline, and skip missed slots on slow frames. This provides a stable
+  // long-term frame cadence without cumulative drift.
+
+  // Initialize the deadline on first use or after a reset (e.g. swapchain recreate).
+  if fFramePacingNextPresentTarget=0 then begin
+   fFramePacingNextPresentTarget:=NowTime+TargetInterval;
+  end else begin
+   // Advance the deadline by one interval for the just-finished frame.
+   fFramePacingNextPresentTarget:=fFramePacingNextPresentTarget+TargetInterval;
+  end;
+
+  if NowTime<fFramePacingNextPresentTarget then begin
+
+   // Frame finished early => sleep until the absolute deadline.
+   fFramePacingSleepWithDriftCompensation.Sleep(fFramePacingNextPresentTarget-NowTime);
+   NowTime:=fHighResolutionTimer.GetTime;
+
+  end else begin
+
+   // Frame finished late => skip missed deadline slots so we do not accumulate
+   // an ever-growing delay or burst of short-sleeping catch-up frames.
+   LateAmount:=NowTime-fFramePacingNextPresentTarget;
+   Skipped:=(LateAmount div TargetInterval)+1;
+   fFramePacingNextPresentTarget:=fFramePacingNextPresentTarget+(Skipped*TargetInterval);
+
+  end;
+
+  // Reset deviation-based state since it is not used in this mode.
+  fFrameRateLimiterDeviation:=0;
+
+ end else if TargetInterval>0 then begin
+
+  // Reactive deviation-compensated pacing (original behavior for all other modes).
 
   // Check if the deviation should be reset to zero, for example, if a slow frame was present.
   if (FrameTime*100)>((TargetInterval*103)-(fFrameRateLimiterDeviation*100)) then begin
@@ -12498,10 +12535,14 @@ begin
 
   end;
 
+  // Reset absolute raster state since it is not used in this mode.
+  fFramePacingNextPresentTarget:=0;
+
  end else begin
 
   // No frame limiter and no frame pacing => Do not sleep at all
   fFrameRateLimiterDeviation:=0;
+  fFramePacingNextPresentTarget:=0;
 
  end;
 
