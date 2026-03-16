@@ -9299,8 +9299,25 @@ begin
  end;
 end;
 {$elseif defined(Windows) and not defined(PasVulkanHeadless)}
-begin // TODO
+var MonitorHandle:HMONITOR;
+    MonitorInfoEx:{$ifdef fpc}TMONITORINFOEXW{$else}TMonitorInfoExW{$endif};
+    devMode:{$ifdef fpc}TDEVMODEW{$else}DEVMODEW{$endif};
+begin
  result:=0.0;
+ MonitorHandle:=MonitorFromWindow(fWin32Handle,MONITOR_DEFAULTTONEAREST);
+ if MonitorHandle<>0 then begin
+  FillChar(MonitorInfoEx,SizeOf(MonitorInfoEx),#0);
+  MonitorInfoEx.cbSize:=SizeOf(MonitorInfoEx);
+  if GetMonitorInfoW(MonitorHandle,@MonitorInfoEx) then begin
+   FillChar(devMode,SizeOf(devMode),#0);
+   devMode.dmSize:=SizeOf(devMode);
+   if EnumDisplaySettingsW(@MonitorInfoEx.szDevice[0],ENUM_CURRENT_SETTINGS,{$ifdef fpc}@{$endif}devMode) then begin
+    if devMode.dmDisplayFrequency>1 then begin
+     result:=devMode.dmDisplayFrequency;
+    end;
+   end;
+  end;
+ end;
 end;
 {$else}
 begin
