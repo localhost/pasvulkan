@@ -1757,6 +1757,7 @@ type EpvApplication=class(Exception)
        fFramePacingSleepWithDriftCompensation:TpvHighResolutionTimerSleepWithDriftCompensation;
        fFramePacingPresentTimingRefreshDuration:TpvUInt64; // from VK_EXT_present_timing, in nanoseconds
        fFramePacingPresentTimingAvailable:boolean;
+       fFramePacingEffectiveInterval:TpvInt64; // computed pacing interval, consumed by FrameRateLimiter
 
        fFrameTimesHistoryDeltaTimes:array[0..FrameTimesHistorySize-1] of TpvDouble;
        fFrameTimesHistoryTimePoints:array[0..FrameTimesHistorySize-1] of TpvHighResolutionTime;
@@ -9010,6 +9011,7 @@ begin
  fFramePacingDriftAccumulator:=0;
  fFramePacingPresentTimingRefreshDuration:=0;
  fFramePacingPresentTimingAvailable:=false;
+ fFramePacingEffectiveInterval:=0;
 
  fFrameCounter:=0;
 
@@ -10394,6 +10396,7 @@ begin
  // Query VK_EXT_present_timing refresh duration if available
  fFramePacingPresentTimingAvailable:=false;
  fFramePacingPresentTimingRefreshDuration:=0;
+ fFramePacingEffectiveInterval:=0;
  if assigned(fVulkanDevice) and
     fVulkanDevice.PresentTimingSupport and
     assigned(fVulkanDevice.Commands.Commands.GetSwapchainTimingPropertiesEXT) then begin
@@ -11113,7 +11116,7 @@ var Target,TimeOut:TpvUInt64;
     PrepreviousFrameFrenceIndex:TpvInt32;
     PrepreviousFrameFrenceMask:TpvUInt32;
     PrepreviousFrameFrence:TpvVulkanFence;
-    PacingNow,PacingInterval,PacingSleepDuration,PacingDiff:TpvInt64;
+    PacingNow,PacingInterval:TpvInt64;
     PacingSum:TpvInt64;
     PacingIndex,PacingSortIndex,PacingCount:TpvInt32;
     PacingSorted:array[0..FramePacingHistorySize-1] of TpvInt64;
@@ -11239,16 +11242,15 @@ begin
   end;
 
   /////////////////////////////////////////////////////////////////////////
-  // Frame pacing: align CPU frame start to estimated display refresh    //
-  // boundaries for temporally consistent frame output.                  //
+  // Frame pacing: estimate display refresh interval and publish it to   //
+  // FrameRateLimiter which does the actual sleep at frame end.          //
   /////////////////////////////////////////////////////////////////////////
 
   if fBlocking and (fFramePacingMode<>TpvApplicationFramePacingMode.None) then begin
 
    PacingNow:=fHighResolutionTimer.GetTime;
 
-   // Record timestamp for frame pacing estimation (measured AFTER GPU waits,
-   // BEFORE pacing sleep, so the sleep is not included in the interval estimate)
+   // Record frame-to-frame interval for refresh rate estimation.
    if fFramePacingLastPresentTime<>0 then begin
     fFramePacingHistory[fFramePacingHistoryIndex]:=PacingNow-fFramePacingLastPresentTime;
     fFramePacingHistoryIndex:=(fFramePacingHistoryIndex+1) and FramePacingHistoryMask;
@@ -11256,7 +11258,6 @@ begin
      inc(fFramePacingHistoryCount);
     end;
    end;
-   fFramePacingLastPresentTime:=PacingNow;
 
    // Determine the effective refresh interval:
    // Prefer VK_EXT_present_timing hardware data when available,
@@ -11290,70 +11291,24 @@ begin
     end;
     // Use median (middle quartile range average for robustness)
     PacingSum:=0;
-    for PacingIndex:=(PacingCount shr 2) to PacingCount-1-(PacingCount shr 2) do begin
+    for PacingIndex:=(PacingCount shr 2) to (PacingCount-(PacingCount shr 2))-1 do begin
      PacingSum:=PacingSum+PacingSorted[PacingIndex];
     end;
     PacingInterval:=PacingSum div (PacingCount-(2*(PacingCount shr 2)));
 
    end;
 
-   // Sanity check: only apply frame pacing when the estimated interval looks like
-   // a realistic display refresh rate (between ~4ms/250Hz and ~50ms/20Hz).
-   // During loading screens or other slow frames, the software estimation would
-   // produce huge intervals that cause additional unnecessary sleep.
+   // Sanity check: only publish the estimated interval when it looks like
+   // a realistic display refresh rate (between ~8ms/125Hz and ~50ms/20Hz).
    if (PacingInterval>0) and
-      (PacingInterval>=fHighResolutionTimer.FromMilliseconds(4)) and
+      (PacingInterval>=fHighResolutionTimer.FromMilliseconds(8)) and
       (PacingInterval<=fHighResolutionTimer.FromMilliseconds(50)) then begin
-
-    if (fFramePacingNextPresentTarget=0) or
-       // Reset phase lock if we drifted more than 1.5x the refresh interval
-       (abs(PacingNow-fFramePacingNextPresentTarget)>(PacingInterval+(PacingInterval shr 1))) then begin
-     // Initialize or reinitialize: target the next refresh boundary
-     fFramePacingNextPresentTarget:=PacingNow+PacingInterval;
-     fFramePacingDriftAccumulator:=0;
-     fFramePacingActive:=true;
-    end;
-
-    if fFramePacingActive then begin
-
-     // Calculate how long we need to sleep to hit the target
-     PacingSleepDuration:=(fFramePacingNextPresentTarget-PacingNow)-fFramePacingDriftAccumulator;
-
-     if PacingSleepDuration>0 then begin
-      // Only sleep if meaningful (more than ~0.5ms to avoid busy-wait overhead)
-      if PacingSleepDuration>(fHighResolutionTimer.MillisecondInterval shr 1) then begin
-       PacingNow:=fFramePacingSleepWithDriftCompensation.Sleep(PacingSleepDuration);
-      end else begin
-       // Spin-wait for very short durations
-       while fHighResolutionTimer.GetTime<(fFramePacingNextPresentTarget-fFramePacingDriftAccumulator) do begin
-        TPasMP.Yield;
-       end;
-       PacingNow:=fHighResolutionTimer.GetTime;
-      end;
-     end;
-
-     // Measure actual drift and accumulate for compensation on next frame
-     PacingDiff:=PacingNow-fFramePacingNextPresentTarget;
-     // Clamp drift accumulator to avoid over-compensation after stalls
-     fFramePacingDriftAccumulator:=PacingDiff;
-     if fFramePacingDriftAccumulator>(PacingInterval shr 3) then begin
-      fFramePacingDriftAccumulator:=PacingInterval shr 3;
-     end else if fFramePacingDriftAccumulator<(-(PacingInterval shr 3)) then begin
-      fFramePacingDriftAccumulator:=-(PacingInterval shr 3);
-     end;
-
-     // Advance target to next refresh boundary
-     fFramePacingNextPresentTarget:=fFramePacingNextPresentTarget+PacingInterval;
-
-     // If we fell behind, snap forward to avoid cascading catch-up
-     if fFramePacingNextPresentTarget<PacingNow then begin
-      fFramePacingNextPresentTarget:=PacingNow+PacingInterval;
-      fFramePacingDriftAccumulator:=0;
-     end;
-
-    end;
-
+    fFramePacingEffectiveInterval:=PacingInterval;
+   end else begin
+    fFramePacingEffectiveInterval:=0;
    end;
+
+   fFramePacingLastPresentTime:=PacingNow;
 
   end;
 
@@ -12444,13 +12399,28 @@ begin
  // Calculate frame time
  FrameTime:=NowTime-LastTime;
 
- // Check the frame limiter is enabled at all.
+ // Determine target interval: FPS limiter takes priority, then frame pacing,
+ // otherwise no throttling. Both use the same reactive sleep-at-frame-end
+ // mechanism for stable DeltaTime.
+
  if (fMaximumFramesPerSecond>0.0) and not IsZero(fMaximumFramesPerSecond) then begin
 
   // If the frame limiter is enabled, do our magic here. :-)
 
   // Calculate the target time interval based on the maximum frames per second value.
   TargetInterval:=fHighResolutionTimer.FromFloatSeconds(1.0/fMaximumFramesPerSecond);
+
+ end else if fFramePacingEffectiveInterval>0 then begin
+
+  TargetInterval:=fFramePacingEffectiveInterval;
+
+ end else begin
+
+  TargetInterval:=0;
+
+ end;
+
+ if TargetInterval>0 then begin
 
   // Check if the deviation should be reset to zero, for example, if a slow frame was present.
   if (FrameTime*100)>((TargetInterval*103)-(fFrameRateLimiterDeviation*100)) then begin
@@ -12480,7 +12450,7 @@ begin
 
  end else begin
 
-  // Disabled frame limiter => Do not sleeping at all
+  // No frame limiter and no frame pacing => Do not sleep at all
   fFrameRateLimiterDeviation:=0;
 
  end;
