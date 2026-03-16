@@ -9299,6 +9299,7 @@ begin
  end;
 end;
 {$elseif defined(Windows) and not defined(PasVulkanHeadless)}
+const ENUM_CURRENT_SETTINGS=DWORD(-1);
 var MonitorHandle:HMONITOR;
     MonitorInfoEx:{$ifdef fpc}TMONITORINFOEXW{$else}TMonitorInfoExW{$endif};
     devMode:{$ifdef fpc}TDEVMODEW{$else}DEVMODEW{$endif};
