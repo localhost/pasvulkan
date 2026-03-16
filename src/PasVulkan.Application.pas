@@ -1370,8 +1370,14 @@ type EpvApplication=class(Exception)
        None=0,
        Auto=1,
        Software=2,
-       VulkanPresentTiming=3,
-       AbsoluteTimeRaster=4
+       VulkanPresentTiming=3
+      );
+
+     PpvApplicationFramePacingStrategy=^TpvApplicationFramePacingStrategy;
+     TpvApplicationFramePacingStrategy=
+      (
+       DeviationCompensation=0,
+       AbsoluteTimeRaster=1
       );
 
      TpvApplicationProcessingMode=
@@ -1747,6 +1753,7 @@ type EpvApplication=class(Exception)
 
        // Frame pacing state for temporally consistent frame output
        fFramePacingMode:TpvApplicationFramePacingMode;
+       fFramePacingStrategy:TpvApplicationFramePacingStrategy;
        fFramePacingActive:boolean;
        fFramePacingEstimatedRefreshInterval:TpvInt64; // in high-res timer ticks
        fFramePacingNextPresentTarget:TpvInt64;
@@ -2209,6 +2216,8 @@ type EpvApplication=class(Exception)
        property PresentMode:TpvApplicationPresentMode read fPresentMode write fPresentMode;
 
        property FramePacingMode:TpvApplicationFramePacingMode read fFramePacingMode write fFramePacingMode;
+
+       property FramePacingStrategy:TpvApplicationFramePacingStrategy read fFramePacingStrategy write fFramePacingStrategy;
 
        property PresentFrameLatency:TpvUInt64 read fPresentFrameLatency write fPresentFrameLatency;
 
@@ -9004,6 +9013,7 @@ begin
  fFrameRateLimiterDeviation:=0;
 
  fFramePacingMode:=TpvApplicationFramePacingMode.None;
+ fFramePacingStrategy:=TpvApplicationFramePacingStrategy.AbsoluteTimeRaster;
  fFramePacingActive:=false;
  fFramePacingEstimatedRefreshInterval:=0;
  fFramePacingNextPresentTarget:=0;
@@ -11306,13 +11316,13 @@ begin
    // otherwise fall back to software estimation from present history.
    PacingInterval:=0;
 
-   if (fFramePacingMode in [TpvApplicationFramePacingMode.Auto,TpvApplicationFramePacingMode.VulkanPresentTiming,TpvApplicationFramePacingMode.AbsoluteTimeRaster]) and
+   if (fFramePacingMode in [TpvApplicationFramePacingMode.Auto,TpvApplicationFramePacingMode.VulkanPresentTiming]) and
       fFramePacingPresentTimingAvailable and (fFramePacingPresentTimingRefreshDuration>0) then begin
 
     // VK_EXT_present_timing path: use the actual refresh duration reported by the driver
     PacingInterval:=fHighResolutionTimer.FromNanoseconds(fFramePacingPresentTimingRefreshDuration);
 
-   end else if fFramePacingMode in [TpvApplicationFramePacingMode.Auto,TpvApplicationFramePacingMode.Software,TpvApplicationFramePacingMode.AbsoluteTimeRaster] then begin
+   end else if fFramePacingMode in [TpvApplicationFramePacingMode.Auto,TpvApplicationFramePacingMode.Software] then begin
 
     RefreshRate:=GetNativeRefreshRate;
 
@@ -12472,7 +12482,7 @@ begin
 
  end;
 
- if (fFramePacingMode=TpvApplicationFramePacingMode.AbsoluteTimeRaster) and (TargetInterval>0) then begin
+ if (fFramePacingStrategy=TpvApplicationFramePacingStrategy.AbsoluteTimeRaster) and (TargetInterval>0) then begin
 
   // Absolute time raster pacing: advance a fixed deadline by the target interval each frame,
   // sleep until the deadline, and skip missed slots on slow frames. This provides a stable
