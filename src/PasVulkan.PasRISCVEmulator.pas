@@ -1634,7 +1634,7 @@ begin
  VirtIOBlockFile:=GetVirtIOBlockImageFileName;
  if assigned(fMachine.VirtIOBlockDevice) then begin
   if FileExists(VirtIOBlockFile) then begin
-   Stream:=TFileStream.Create(VirtIOBlockFile,fmOpenReadWrite);
+   Stream:=TPasRISCVFileMappedStream.Create(VirtIOBlockFile,fmOpenReadWrite,true);
    if assigned(Stream) then begin
     try
      fMachine.VirtIOBlockDevice.AttachStream(Stream);
@@ -1643,7 +1643,7 @@ begin
     end;
    end;
   end else if FileExists(IncludeTrailingPathDelimiter(IncludeTrailingPathDelimiter(pvApplication.Assets.BasePath)+'riscv')+VirtIOBlockFile) then begin
-   Stream:=TFileStream.Create(IncludeTrailingPathDelimiter(IncludeTrailingPathDelimiter(pvApplication.Assets.BasePath)+'riscv')+VirtIOBlockFile,fmOpenReadWrite);
+   Stream:=TPasRISCVFileMappedStream.Create(IncludeTrailingPathDelimiter(IncludeTrailingPathDelimiter(pvApplication.Assets.BasePath)+'riscv')+VirtIOBlockFile,fmOpenReadWrite,true);
    if assigned(Stream) then begin
     try
      fMachine.VirtIOBlockDevice.AttachStream(Stream);
@@ -1666,7 +1666,7 @@ begin
  NVMeFile:=GetNVMeImageFileName;
  if assigned(fMachine.NVMeDevice) then begin
   if FileExists(NVMeFile) then begin
-   Stream:=TFileStream.Create(NVMeFile,fmOpenReadWrite);
+   Stream:=TPasRISCVFileMappedStream.Create(NVMeFile,fmOpenReadWrite,true);
    if assigned(Stream) then begin
     try
      fMachine.NVMeDevice.AttachStream(Stream);
@@ -1675,7 +1675,7 @@ begin
     end;
    end;
   end else if FileExists(IncludeTrailingPathDelimiter(IncludeTrailingPathDelimiter(pvApplication.Assets.BasePath)+'riscv')+NVMeFile) then begin
-   Stream:=TFileStream.Create(IncludeTrailingPathDelimiter(IncludeTrailingPathDelimiter(pvApplication.Assets.BasePath)+'riscv')+NVMeFile,fmOpenReadWrite);
+   Stream:=TPasRISCVFileMappedStream.Create(IncludeTrailingPathDelimiter(IncludeTrailingPathDelimiter(pvApplication.Assets.BasePath)+'riscv')+NVMeFile,fmOpenReadWrite,true);
    if assigned(Stream) then begin
     try
      fMachine.NVMeDevice.AttachStream(Stream);
