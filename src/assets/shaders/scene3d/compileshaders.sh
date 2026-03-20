@@ -536,6 +536,12 @@ compileshaderarguments=(
 
   "-V planet_heightmap_smooth.comp -o ${tempPath}/planet_heightmap_smooth_comp.spv"
 
+  "-V planet_heightmap_flatten_beforestate.comp -o ${tempPath}/planet_heightmap_flatten_beforestate_comp.spv"
+
+  "-V planet_heightmap_modification_targetheight.comp -o ${tempPath}/planet_heightmap_modification_targetheight_comp.spv"
+
+  "-V planet_heightmap_brush_smooth.comp -o ${tempPath}/planet_heightmap_brush_smooth_comp.spv"
+
   "-V planet_normalmap_generation.comp -o ${tempPath}/planet_normalmap_generation_comp.spv"
 
   "-V planet_tiled_mesh_index_generation.comp -o ${tempPath}/planet_tiled_mesh_index_generation_comp.spv"
