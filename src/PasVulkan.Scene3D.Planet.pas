@@ -280,6 +280,16 @@ type TpvScene3DPlanets=class;
             end;
             PHeightMapBrushSmoothItem=^THeightMapBrushSmoothItem;
             THeightMapBrushSmoothItems=array[0..MaxInFlightFrames-1] of THeightMapBrushSmoothItem;
+            THeightMapBrushSmearItem=packed record
+             PositionRadius:TpvVector4;
+             InnerRadius:TpvFloat;
+             Rate:TpvFloat; // smear pickup rate [0,1]: higher = more memory of smeared value
+             BrushIndex:TpvUInt32;
+             BrushRotation:TpvFloat;
+             Active:TpvUInt32; // non-zero when item is pending
+            end;
+            PHeightMapBrushSmearItem=^THeightMapBrushSmearItem;
+            THeightMapBrushSmearItems=array[0..MaxInFlightFrames-1] of THeightMapBrushSmearItem;
             TBlendMapModificationItem=packed record
              PositionRadius:TpvVector4;
              InnerRadius:TpvFloat;
@@ -381,6 +391,8 @@ type TpvScene3DPlanets=class;
               fHeightMapSmoothedImage:TpvScene3DRendererMipmapImage2D; // R32_SFLOAT (at least for now, just for the sake of simplicity, later maybe R16_UNORM or R16_SNORM)
               fHeightMapBeforeStateImage:TpvScene3DRendererMipmapImage2D; // R32_SFLOAT, frozen snapshot at brush-stroke start; ground-truth instance only
               fHeightMapBeforeStateValid:TPasMPBool32; // true when fHeightMapBeforeStateImage holds a valid snapshot
+              fHeightMapSmearBufferImage:TpvScene3DRendererMipmapImage2D; // R32_SFLOAT, persistent smear buffer (GENERAL layout); ground-truth instance only
+              fHeightMapSmearBufferValid:TPasMPBool32; // true when fHeightMapSmearBufferImage holds initialized data
               fHeightMapBuffer:TpvVulkanBuffer;
               fNormalMapImage:TpvScene3DRendererMipmapImage2D; // A2B10G10R10_UNORM_PACK32
               fBlendMapImage:TpvScene3DRendererArray2DImage; // R8G8B8A8_UNORM
@@ -547,6 +559,8 @@ type TpvScene3DPlanets=class;
               property HeightMapSmoothedImage:TpvScene3DRendererMipmapImage2D read fHeightMapSmoothedImage;
               property HeightMapBeforeStateImage:TpvScene3DRendererMipmapImage2D read fHeightMapBeforeStateImage;
               property HeightMapBeforeStateValid:TPasMPBool32 read fHeightMapBeforeStateValid write fHeightMapBeforeStateValid;
+              property HeightMapSmearBufferImage:TpvScene3DRendererMipmapImage2D read fHeightMapSmearBufferImage;
+              property HeightMapSmearBufferValid:TPasMPBool32 read fHeightMapSmearBufferValid write fHeightMapSmearBufferValid;
               property HeightMapBuffer:TpvVulkanBuffer read fHeightMapBuffer;
               property NormalMapImage:TpvScene3DRendererMipmapImage2D read fNormalMapImage;
               property BlendMapImage:TpvScene3DRendererArray2DImage read fBlendMapImage;
@@ -1594,6 +1608,36 @@ type TpvScene3DPlanets=class;
               constructor Create(const aPlanet:TpvScene3DPlanet); reintroduce;
               destructor Destroy; override;
               procedure Execute(const aCommandBuffer:TpvVulkanCommandBuffer;const aItem:THeightMapBrushSmoothItem);
+             public
+              property PushConstants:TPushConstants read fPushConstants write fPushConstants;
+            end;
+            { THeightMapBrushSmear }
+            THeightMapBrushSmear=class
+             public
+              type TPushConstants=packed record
+                    PositionRadius:TpvVector4;        // xyz = position, w = outer radius
+                    InnerRadiusRateUnused:TpvVector4; // x=innerRadius, y=rate, z/w=unused
+                    TileMapResolution:TpvUInt32;
+                    TileMapShift:TpvUInt32;
+                    BrushIndex:TpvUInt32;
+                    BrushRotation:TpvFloat;
+                   end;
+                   PPushConstants=^TPushConstants;
+             private
+              fPlanet:TpvScene3DPlanet;
+              fVulkanDevice:TpvVulkanDevice;
+              fComputeShaderModule:TpvVulkanShaderModule;
+              fComputeShaderStage:TpvVulkanPipelineShaderStage;
+              fPipeline:TpvVulkanComputePipeline;
+              fDescriptorSetLayout:TpvVulkanDescriptorSetLayout;
+              fDescriptorPool:TpvVulkanDescriptorPool;
+              fDescriptorSet:TpvVulkanDescriptorSet;
+              fPipelineLayout:TpvVulkanPipelineLayout;
+              fPushConstants:TPushConstants;
+             public
+              constructor Create(const aPlanet:TpvScene3DPlanet); reintroduce;
+              destructor Destroy; override;
+              procedure Execute(const aCommandBuffer:TpvVulkanCommandBuffer;const aItem:THeightMapBrushSmearItem);
              public
               property PushConstants:TPushConstants read fPushConstants write fPushConstants;
             end;
@@ -2771,6 +2815,7 @@ type TpvScene3DPlanets=class;
        fHeightMapFlattenBeforeState:THeightMapFlattenBeforeState;
        fHeightMapModificationToTargetHeight:THeightMapModificationToTargetHeight;
        fHeightMapBrushSmooth:THeightMapBrushSmooth;
+       fHeightMapBrushSmear:THeightMapBrushSmear;
        fTiledMeshBoundingVolumesGeneration:TTiledMeshBoundingVolumesGeneration;
        fTileDirtyExpansion:TTileDirtyExpansion;
        fTileDirtyQueueGeneration:TTileDirtyQueueGeneration;
@@ -2813,6 +2858,7 @@ type TpvScene3DPlanets=class;
        fHeightMapFlattenBeforeStateItems:THeightMapFlattenBeforeStateItems;
        fHeightMapModificationToTargetHeightItems:THeightMapModificationToTargetHeightItems;
        fHeightMapBrushSmoothItems:THeightMapBrushSmoothItems;
+       fHeightMapBrushSmearItems:THeightMapBrushSmearItems;
        fBlendMapModificationItems:TBlendMapModificationItems;
        fBlendMapUpdateGeneration:TpvUInt64;
        fBlendMapTransferGeneration:TpvUInt64;
@@ -2925,6 +2971,9 @@ type TpvScene3DPlanets=class;
        procedure EnqueueHeightMapFlattenBeforeState(const aInFlightFrameIndex:TpvSizeInt;const aVector:TpvVector3;const aInnerRadius,aOuterRadius,aTargetHeight:TpvFloat;const aBrushIndex:TpvUInt32;const aBrushRotation:TpvFloat);
        procedure EnqueueHeightMapModificationToTargetHeight(const aInFlightFrameIndex:TpvSizeInt;const aPosition:TpvVector3;const aRadius,aBorderRadius,aTargetHeight,aStrength:TpvFloat;const aBrushIndex:TpvUInt32;const aBrushRotation:TpvFloat);
        procedure EnqueueHeightMapBrushSmooth(const aInFlightFrameIndex:TpvSizeInt;const aPosition:TpvVector3;const aRadius,aBorderRadius,aStrength,aKernelRadius,aSigma:TpvFloat;const aBrushIndex:TpvUInt32;const aBrushRotation:TpvFloat);
+       procedure CaptureSmearBuffer(const aCommandBuffer:TpvVulkanCommandBuffer);
+       procedure ReleaseSmearBuffer;
+       procedure EnqueueHeightMapBrushSmear(const aInFlightFrameIndex:TpvSizeInt;const aPosition:TpvVector3;const aRadius,aBorderRadius,aRate:TpvFloat;const aBrushIndex:TpvUInt32;const aBrushRotation:TpvFloat);
        procedure MarkAllTilesDirty;
        procedure EnqueueBlendMapModification(const aInFlightFrameIndex:TpvSizeInt;const aPosition:TpvVector3;const aRadius,aBorderRadius,aValue:TpvScalar;const aReplace:Boolean);
        procedure EnqueueGrassMapModification(const aInFlightFrameIndex:TpvSizeInt;const aPosition:TpvVector3;const aRadius,aBorderRadius,aValue:TpvScalar;const aOnlyIfEmpty:Boolean=false);
@@ -3692,6 +3741,10 @@ begin
 
  fHeightMapBeforeStateValid:=false;
 
+ fHeightMapSmearBufferImage:=nil;
+
+ fHeightMapSmearBufferValid:=false;
+
  fHeightMapBuffer:=nil;
 
  fNormalMapImage:=nil;
@@ -3890,6 +3943,22 @@ begin
     fPlanet.fVulkanDevice.DebugUtils.SetObjectName(fHeightMapBeforeStateImage.VulkanImage.Handle,VK_OBJECT_TYPE_IMAGE,'TpvScene3DPlanet.TData['+IntToStr(fInFlightFrameIndex)+'].fHeightMapBeforeStateImage.Image');
     fPlanet.fVulkanDevice.DebugUtils.SetObjectName(fHeightMapBeforeStateImage.VulkanImageView.Handle,VK_OBJECT_TYPE_IMAGE_VIEW,'TpvScene3DPlanet.TData['+IntToStr(fInFlightFrameIndex)+'].fHeightMapBeforeStateImage.ImageView');
     fHeightMapBeforeStateValid:=false;
+
+    // Smear buffer: persistent R32_SFLOAT image in GENERAL layout (read+write in same shader).
+    fHeightMapSmearBufferImage:=TpvScene3DRendererMipmapImage2D.Create(fPlanet.fVulkanDevice,
+                                                                       fPlanet.fHeightMapResolution,
+                                                                       fPlanet.fHeightMapResolution,
+                                                                       VK_FORMAT_R32_SFLOAT,
+                                                                       true,
+                                                                       VK_SAMPLE_COUNT_1_BIT,
+                                                                       VK_IMAGE_LAYOUT_GENERAL,
+                                                                       ImageSharingMode,
+                                                                       ImageQueueFamilyIndices,
+                                                                       pvAllocationGroupIDScene3DPlanetStatic,
+                                                                       'TpvScene3DPlanet.TData['+IntToStr(fInFlightFrameIndex)+'].fHeightMapSmearBufferImage');
+    fPlanet.fVulkanDevice.DebugUtils.SetObjectName(fHeightMapSmearBufferImage.VulkanImage.Handle,VK_OBJECT_TYPE_IMAGE,'TpvScene3DPlanet.TData['+IntToStr(fInFlightFrameIndex)+'].fHeightMapSmearBufferImage.Image');
+    fPlanet.fVulkanDevice.DebugUtils.SetObjectName(fHeightMapSmearBufferImage.VulkanImageView.Handle,VK_OBJECT_TYPE_IMAGE_VIEW,'TpvScene3DPlanet.TData['+IntToStr(fInFlightFrameIndex)+'].fHeightMapSmearBufferImage.ImageView');
+    fHeightMapSmearBufferValid:=false;
    end;
 
    if (fInFlightFrameIndex<0) and fPlanet.fUsePlanetHeightMapBuffer then begin
@@ -4829,6 +4898,8 @@ begin
 
   FreeAndNil(fHeightMapBeforeStateImage);
 
+  FreeAndNil(fHeightMapSmearBufferImage);
+
   FreeAndNil(fHeightMapBuffer);
 
   FreeAndNil(fNormalMapImage);
@@ -4864,6 +4935,8 @@ begin
   fHeightMapSmoothedImage:=nil;
 
   fHeightMapBeforeStateImage:=nil;
+
+  fHeightMapSmearBufferImage:=nil;
 
   fHeightMapBuffer:=nil;
 
@@ -17288,6 +17361,308 @@ begin
 
 end;
 
+{ TpvScene3DPlanet.THeightMapBrushSmear }
+
+constructor TpvScene3DPlanet.THeightMapBrushSmear.Create(const aPlanet:TpvScene3DPlanet);
+var Stream:TStream;
+begin
+
+ inherited Create;
+
+ fPlanet:=aPlanet;
+
+ fVulkanDevice:=fPlanet.fVulkanDevice;
+
+ if assigned(fVulkanDevice) then begin
+
+  Stream:=pvScene3DShaderVirtualFileSystem.GetFile('planet_heightmap_brush_smear_comp.spv');
+  try
+   fComputeShaderModule:=TpvVulkanShaderModule.Create(fVulkanDevice,Stream);
+  finally
+   FreeAndNil(Stream);
+  end;
+
+  fVulkanDevice.DebugUtils.SetObjectName(fComputeShaderModule.Handle,VK_OBJECT_TYPE_SHADER_MODULE,'TpvScene3DPlanet.THeightMapBrushSmear.fComputeShaderModule');
+
+  fComputeShaderStage:=TpvVulkanPipelineShaderStage.Create(VK_SHADER_STAGE_COMPUTE_BIT,fComputeShaderModule,'main');
+
+  fDescriptorSetLayout:=TpvVulkanDescriptorSetLayout.Create(fVulkanDevice);
+  fDescriptorSetLayout.AddBinding(0,
+                                  TVkDescriptorType(VK_DESCRIPTOR_TYPE_STORAGE_IMAGE),
+                                  1,
+                                  TVkShaderStageFlags(VK_SHADER_STAGE_COMPUTE_BIT),
+                                  [],
+                                  0);
+  fDescriptorSetLayout.AddBinding(1,
+                                  TVkDescriptorType(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER),
+                                  1,
+                                  TVkShaderStageFlags(VK_SHADER_STAGE_COMPUTE_BIT),
+                                  [],
+                                  0);
+  fDescriptorSetLayout.AddBinding(2,
+                                  TVkDescriptorType(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER),
+                                  1,
+                                  TVkShaderStageFlags(VK_SHADER_STAGE_COMPUTE_BIT),
+                                  [],
+                                  TVkDescriptorBindingFlags(VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT));
+  // Binding 3: smear buffer — STORAGE_IMAGE (GENERAL, read+write in same dispatch)
+  fDescriptorSetLayout.AddBinding(3,
+                                  TVkDescriptorType(VK_DESCRIPTOR_TYPE_STORAGE_IMAGE),
+                                  1,
+                                  TVkShaderStageFlags(VK_SHADER_STAGE_COMPUTE_BIT),
+                                  [],
+                                  0);
+  fDescriptorSetLayout.Initialize;
+  fPlanet.fVulkanDevice.DebugUtils.SetObjectName(fDescriptorSetLayout.Handle,VK_OBJECT_TYPE_DESCRIPTOR_SET_LAYOUT,'TpvScene3DPlanet.THeightMapBrushSmear.fDescriptorSetLayout');
+
+  fPipelineLayout:=TpvVulkanPipelineLayout.Create(fVulkanDevice);
+  fPipelineLayout.AddPushConstantRange(TVkShaderStageFlags(VK_SHADER_STAGE_COMPUTE_BIT),0,SizeOf(TPushConstants));
+  fPipelineLayout.AddDescriptorSetLayout(fDescriptorSetLayout);
+  fPipelineLayout.Initialize;
+  fPlanet.fVulkanDevice.DebugUtils.SetObjectName(fPipelineLayout.Handle,VK_OBJECT_TYPE_PIPELINE_LAYOUT,'TpvScene3DPlanet.THeightMapBrushSmear.fPipelineLayout');
+
+  fDescriptorPool:=TpvVulkanDescriptorPool.Create(fVulkanDevice,
+                                                  TVkDescriptorPoolCreateFlags(VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT),
+                                                  1);
+  fDescriptorPool.AddDescriptorPoolSize(TVkDescriptorType(VK_DESCRIPTOR_TYPE_STORAGE_IMAGE),2);
+  fDescriptorPool.AddDescriptorPoolSize(TVkDescriptorType(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER),1);
+  fDescriptorPool.AddDescriptorPoolSize(TVkDescriptorType(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER),1);
+  fDescriptorPool.Initialize;
+  fPlanet.fVulkanDevice.DebugUtils.SetObjectName(fDescriptorPool.Handle,VK_OBJECT_TYPE_DESCRIPTOR_POOL,'TpvScene3DPlanet.THeightMapBrushSmear.fDescriptorPool');
+
+  fDescriptorSet:=TpvVulkanDescriptorSet.Create(fDescriptorPool,fDescriptorSetLayout);
+  fDescriptorSet.WriteToDescriptorSet(0,
+                                      0,
+                                      1,
+                                      TVkDescriptorType(VK_DESCRIPTOR_TYPE_STORAGE_IMAGE),
+                                      [TVkDescriptorImageInfo.Create(VK_NULL_HANDLE,
+                                                                     fPlanet.fData.fHeightMapImage.VulkanImageViews[0].Handle,
+                                                                     VK_IMAGE_LAYOUT_GENERAL)],
+                                      [],
+                                      [],
+                                      false);
+  fDescriptorSet.WriteToDescriptorSet(1,
+                                      0,
+                                      1,
+                                      TVkDescriptorType(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER),
+                                      [],
+                                      [TVkDescriptorBufferInfo.Create(fPlanet.fData.fTileDirtyMapBuffer.Handle,
+                                                                      0,
+                                                                      VK_WHOLE_SIZE)],
+                                      [],
+                                      false);
+  fDescriptorSet.WriteToDescriptorSet(2,
+                                      0,
+                                      1,
+                                      TVkDescriptorType(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER),
+                                      [TVkDescriptorImageInfo.Create(TpvScene3D(fPlanet.fScene3D).GeneralComputeSampler.Handle,
+                                                                     fPlanet.fBrushesTexture.ImageView.Handle,
+                                                                     VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)],
+                                      [],
+                                      [],
+                                      false);
+  fDescriptorSet.WriteToDescriptorSet(3,
+                                      0,
+                                      1,
+                                      TVkDescriptorType(VK_DESCRIPTOR_TYPE_STORAGE_IMAGE),
+                                      [TVkDescriptorImageInfo.Create(VK_NULL_HANDLE,
+                                                                     fPlanet.fData.fHeightMapSmearBufferImage.VulkanImageViews[0].Handle,
+                                                                     VK_IMAGE_LAYOUT_GENERAL)],
+                                      [],
+                                      [],
+                                      false);
+  fDescriptorSet.Flush;
+  fPlanet.fVulkanDevice.DebugUtils.SetObjectName(fDescriptorSet.Handle,VK_OBJECT_TYPE_DESCRIPTOR_SET,'TpvScene3DPlanet.THeightMapBrushSmear.fDescriptorSet');
+
+  fPipeline:=TpvVulkanComputePipeline.Create(fVulkanDevice,
+                                             pvApplication.VulkanPipelineCache,
+                                             TVkPipelineCreateFlags(0),
+                                             fComputeShaderStage,
+                                             fPipelineLayout,
+                                             nil,
+                                             0);
+  fPlanet.fVulkanDevice.DebugUtils.SetObjectName(fPipeline.Handle,VK_OBJECT_TYPE_PIPELINE,'TpvScene3DPlanet.THeightMapBrushSmear.fPipeline');
+
+  fPushConstants.PositionRadius:=TpvVector4.Create(0.0,1.0,0.0,0.0);
+  fPushConstants.InnerRadiusRateUnused:=TpvVector4.Create(0.0,0.8,0.0,0.0);
+  fPushConstants.TileMapResolution:=fPlanet.fTileMapResolution;
+  fPushConstants.TileMapShift:=fPlanet.fTileMapShift;
+  fPushConstants.BrushIndex:=0;
+  fPushConstants.BrushRotation:=0.0;
+
+ end;
+
+end;
+
+destructor TpvScene3DPlanet.THeightMapBrushSmear.Destroy;
+begin
+
+ FreeAndNil(fPipeline);
+
+ FreeAndNil(fDescriptorSet);
+
+ FreeAndNil(fDescriptorPool);
+
+ FreeAndNil(fPipelineLayout);
+
+ FreeAndNil(fDescriptorSetLayout);
+
+ FreeAndNil(fComputeShaderStage);
+
+ FreeAndNil(fComputeShaderModule);
+
+ inherited Destroy;
+
+end;
+
+procedure TpvScene3DPlanet.THeightMapBrushSmear.Execute(const aCommandBuffer:TpvVulkanCommandBuffer;const aItem:THeightMapBrushSmearItem);
+var ImageMemoryBarrier:TVkImageMemoryBarrier;
+    BufferMemoryBarrier:TVkBufferMemoryBarrier;
+    ImageMemoryBarriers:array[0..1] of TVkImageMemoryBarrier;
+begin
+
+ fPlanet.fData.fWaterSimulationCountUnderThresholdFrames:=0;
+
+ fPlanet.fVulkanDevice.DebugUtils.CmdBufLabelBegin(aCommandBuffer,'Planet HeightMapBrushSmear',[0.5,0.5,0.5,1.0]);
+
+ begin
+
+  BufferMemoryBarrier:=TVkBufferMemoryBarrier.Create(TVkAccessFlags(VK_ACCESS_SHADER_READ_BIT) or TVkAccessFlags(VK_ACCESS_SHADER_WRITE_BIT) or TVkAccessFlags(VK_ACCESS_TRANSFER_READ_BIT) or TVkAccessFlags(VK_ACCESS_TRANSFER_WRITE_BIT) or TVkAccessFlags(VK_ACCESS_HOST_READ_BIT) or TVkAccessFlags(VK_ACCESS_HOST_WRITE_BIT),
+                                                     TVkAccessFlags(VK_ACCESS_TRANSFER_WRITE_BIT),
+                                                     VK_QUEUE_FAMILY_IGNORED,
+                                                     VK_QUEUE_FAMILY_IGNORED,
+                                                     fPlanet.fData.fTileDirtyMapBuffer.Handle,
+                                                     0,
+                                                     VK_WHOLE_SIZE);
+
+  aCommandBuffer.CmdPipelineBarrier(TVkPipelineStageFlags(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT) or TVkPipelineStageFlags(VK_PIPELINE_STAGE_TRANSFER_BIT) or TVkPipelineStageFlags(VK_PIPELINE_STAGE_HOST_BIT),
+                                    TVkPipelineStageFlags(VK_PIPELINE_STAGE_TRANSFER_BIT),
+                                    0,
+                                    0,nil,
+                                    1,@BufferMemoryBarrier,
+                                    0,nil);
+
+  aCommandBuffer.CmdFillBuffer(fPlanet.fData.fTileDirtyMapBuffer.Handle,
+                               0,
+                               fPlanet.fData.fTileDirtyMapBuffer.Size,
+                               0);
+
+  BufferMemoryBarrier:=TVkBufferMemoryBarrier.Create(TVkAccessFlags(VK_ACCESS_TRANSFER_WRITE_BIT),
+                                                     TVkAccessFlags(VK_ACCESS_SHADER_READ_BIT) or TVkAccessFlags(VK_ACCESS_SHADER_WRITE_BIT) or TVkAccessFlags(VK_ACCESS_TRANSFER_READ_BIT) or TVkAccessFlags(VK_ACCESS_TRANSFER_WRITE_BIT) or TVkAccessFlags(VK_ACCESS_HOST_READ_BIT) or TVkAccessFlags(VK_ACCESS_HOST_WRITE_BIT),
+                                                     VK_QUEUE_FAMILY_IGNORED,
+                                                     VK_QUEUE_FAMILY_IGNORED,
+                                                     fPlanet.fData.fTileDirtyMapBuffer.Handle,
+                                                     0,
+                                                     VK_WHOLE_SIZE);
+
+  aCommandBuffer.CmdPipelineBarrier(TVkPipelineStageFlags(VK_PIPELINE_STAGE_TRANSFER_BIT),
+                                    TVkPipelineStageFlags(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT) or TVkPipelineStageFlags(VK_PIPELINE_STAGE_TRANSFER_BIT) or TVkPipelineStageFlags(VK_PIPELINE_STAGE_HOST_BIT),
+                                    0,
+                                    0,nil,
+                                    1,@BufferMemoryBarrier,
+                                    0,nil);
+
+ end;
+
+ // HeightMap: SHADER_READ_ONLY_OPTIMAL → GENERAL
+ ImageMemoryBarriers[0]:=TVkImageMemoryBarrier.Create(TVkAccessFlags(VK_ACCESS_SHADER_READ_BIT) or TVkAccessFlags(VK_ACCESS_SHADER_WRITE_BIT),
+                                                      TVkAccessFlags(VK_ACCESS_SHADER_READ_BIT) or TVkAccessFlags(VK_ACCESS_SHADER_WRITE_BIT),
+                                                      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                                                      VK_IMAGE_LAYOUT_GENERAL,
+                                                      VK_QUEUE_FAMILY_IGNORED,
+                                                      VK_QUEUE_FAMILY_IGNORED,
+                                                      fPlanet.fData.fHeightMapImage.VulkanImage.Handle,
+                                                      TVkImageSubresourceRange.Create(TVkImageAspectFlags(VK_IMAGE_ASPECT_COLOR_BIT),0,1,0,1));
+ // SmearBuffer: ensure previous writes are visible (stays GENERAL)
+ ImageMemoryBarriers[1]:=TVkImageMemoryBarrier.Create(TVkAccessFlags(VK_ACCESS_SHADER_READ_BIT) or TVkAccessFlags(VK_ACCESS_SHADER_WRITE_BIT) or TVkAccessFlags(VK_ACCESS_TRANSFER_WRITE_BIT),
+                                                      TVkAccessFlags(VK_ACCESS_SHADER_READ_BIT) or TVkAccessFlags(VK_ACCESS_SHADER_WRITE_BIT),
+                                                      VK_IMAGE_LAYOUT_GENERAL,
+                                                      VK_IMAGE_LAYOUT_GENERAL,
+                                                      VK_QUEUE_FAMILY_IGNORED,
+                                                      VK_QUEUE_FAMILY_IGNORED,
+                                                      fPlanet.fData.fHeightMapSmearBufferImage.VulkanImage.Handle,
+                                                      TVkImageSubresourceRange.Create(TVkImageAspectFlags(VK_IMAGE_ASPECT_COLOR_BIT),0,1,0,1));
+
+ BufferMemoryBarrier:=TVkBufferMemoryBarrier.Create(TVkAccessFlags(VK_ACCESS_SHADER_READ_BIT) or TVkAccessFlags(VK_ACCESS_SHADER_WRITE_BIT) or TVkAccessFlags(VK_ACCESS_TRANSFER_READ_BIT) or TVkAccessFlags(VK_ACCESS_TRANSFER_WRITE_BIT) or TVkAccessFlags(VK_ACCESS_HOST_READ_BIT) or TVkAccessFlags(VK_ACCESS_HOST_WRITE_BIT),
+                                                    TVkAccessFlags(VK_ACCESS_SHADER_READ_BIT) or TVkAccessFlags(VK_ACCESS_SHADER_WRITE_BIT),
+                                                    VK_QUEUE_FAMILY_IGNORED,
+                                                    VK_QUEUE_FAMILY_IGNORED,
+                                                    fPlanet.fData.fTileDirtyMapBuffer.Handle,
+                                                    0,
+                                                    VK_WHOLE_SIZE);
+
+ aCommandBuffer.CmdPipelineBarrier(TVkPipelineStageFlags(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT) or TVkPipelineStageFlags(VK_PIPELINE_STAGE_TRANSFER_BIT) or TVkPipelineStageFlags(VK_PIPELINE_STAGE_HOST_BIT),
+                                   TVkPipelineStageFlags(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT),
+                                   0,
+                                   0,nil,
+                                   1,@BufferMemoryBarrier,
+                                   2,@ImageMemoryBarriers[0]);
+
+ aCommandBuffer.CmdBindPipeline(VK_PIPELINE_BIND_POINT_COMPUTE,fPipeline.Handle);
+
+ aCommandBuffer.CmdBindDescriptorSets(VK_PIPELINE_BIND_POINT_COMPUTE,
+                                      fPipelineLayout.Handle,
+                                      0,
+                                      1,
+                                      @fDescriptorSet.Handle,
+                                      0,
+                                      nil);
+
+ fPushConstants.PositionRadius:=aItem.PositionRadius;
+ fPushConstants.InnerRadiusRateUnused:=TpvVector4.InlineableCreate(Max(1e-6,aItem.InnerRadius),aItem.Rate,0.0,0.0);
+ fPushConstants.TileMapResolution:=fPlanet.fTileMapResolution;
+ fPushConstants.TileMapShift:=fPlanet.fTileMapShift;
+ fPushConstants.BrushIndex:=aItem.BrushIndex;
+ fPushConstants.BrushRotation:=aItem.BrushRotation*TwoPI;
+
+ aCommandBuffer.CmdPushConstants(fPipelineLayout.Handle,
+                                 TVkShaderStageFlags(VK_SHADER_STAGE_COMPUTE_BIT),
+                                 0,
+                                 SizeOf(TPushConstants),
+                                 @fPushConstants);
+
+ if assigned(fPlanet.fVulkanDevice.BreadcrumbBuffer) then begin
+  fPlanet.fVulkanDevice.BreadcrumbBuffer.BeginBreadcrumb(aCommandBuffer.Handle,TpvVulkanBreadcrumbType.Dispatch,'HeightMapBrushSmear');
+ end;
+ aCommandBuffer.CmdDispatch((fPlanet.fHeightMapResolution+15) shr 4,
+                            (fPlanet.fHeightMapResolution+15) shr 4,
+                            1);
+ if assigned(fPlanet.fVulkanDevice.BreadcrumbBuffer) then begin
+  fPlanet.fVulkanDevice.BreadcrumbBuffer.EndBreadcrumb(aCommandBuffer.Handle);
+ end;
+
+ // HeightMap back: GENERAL → SHADER_READ_ONLY_OPTIMAL
+ // SmearBuffer stays GENERAL
+ ImageMemoryBarrier:=TVkImageMemoryBarrier.Create(TVkAccessFlags(VK_ACCESS_SHADER_READ_BIT) or TVkAccessFlags(VK_ACCESS_SHADER_WRITE_BIT),
+                                                  TVkAccessFlags(VK_ACCESS_SHADER_READ_BIT) or TVkAccessFlags(VK_ACCESS_SHADER_WRITE_BIT),
+                                                  VK_IMAGE_LAYOUT_GENERAL,
+                                                  VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                                                  VK_QUEUE_FAMILY_IGNORED,
+                                                  VK_QUEUE_FAMILY_IGNORED,
+                                                  fPlanet.fData.fHeightMapImage.VulkanImage.Handle,
+                                                  TVkImageSubresourceRange.Create(TVkImageAspectFlags(VK_IMAGE_ASPECT_COLOR_BIT),0,1,0,1));
+
+ BufferMemoryBarrier:=TVkBufferMemoryBarrier.Create(TVkAccessFlags(VK_ACCESS_SHADER_READ_BIT) or TVkAccessFlags(VK_ACCESS_SHADER_WRITE_BIT),
+                                                    TVkAccessFlags(VK_ACCESS_SHADER_READ_BIT) or TVkAccessFlags(VK_ACCESS_SHADER_WRITE_BIT) or TVkAccessFlags(VK_ACCESS_TRANSFER_READ_BIT) or TVkAccessFlags(VK_ACCESS_TRANSFER_WRITE_BIT) or TVkAccessFlags(VK_ACCESS_HOST_READ_BIT) or TVkAccessFlags(VK_ACCESS_HOST_WRITE_BIT),
+                                                    VK_QUEUE_FAMILY_IGNORED,
+                                                    VK_QUEUE_FAMILY_IGNORED,
+                                                    fPlanet.fData.fTileDirtyMapBuffer.Handle,
+                                                    0,
+                                                    VK_WHOLE_SIZE);
+
+ aCommandBuffer.CmdPipelineBarrier(TVkPipelineStageFlags(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT),
+                                   TVkPipelineStageFlags(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT) or TVkPipelineStageFlags(VK_PIPELINE_STAGE_TRANSFER_BIT) or TVkPipelineStageFlags(VK_PIPELINE_STAGE_HOST_BIT),
+                                   0,
+                                   0,nil,
+                                   1,@BufferMemoryBarrier,
+                                   1,@ImageMemoryBarrier);
+
+ inc(fPlanet.fData.fHeightMapGeneration);
+
+ fPlanet.fVulkanDevice.DebugUtils.CmdBufLabelEnd(aCommandBuffer);
+
+end;
+
 constructor TpvScene3DPlanet.TTiledMeshBoundingVolumesGeneration.Create(const aPlanet:TpvScene3DPlanet);
 var Stream:TStream;
 begin
@@ -26202,6 +26577,8 @@ begin
 
  FillChar(fHeightMapBrushSmoothItems,SizeOf(THeightMapBrushSmoothItems),#0);
 
+ FillChar(fHeightMapBrushSmearItems,SizeOf(THeightMapBrushSmearItems),#0);
+
  FillChar(fBlendMapModificationItems,SizeOf(TBlendMapModificationItems),#0);
 
  fBlendMapUpdateGeneration:=0;
@@ -26583,6 +26960,8 @@ begin
 
  fHeightMapBrushSmooth:=THeightMapBrushSmooth.Create(self);
 
+ fHeightMapBrushSmear:=THeightMapBrushSmear.Create(self);
+
  fTiledMeshBoundingVolumesGeneration:=TTiledMeshBoundingVolumesGeneration.Create(self);
 
  fTileDirtyExpansion:=TTileDirtyExpansion.Create(self);
@@ -26927,6 +27306,8 @@ begin
  FreeAndNil(fHeightMapSmooth);
 
  FreeAndNil(fHeightMapBrushSmooth);
+
+ FreeAndNil(fHeightMapBrushSmear);
 
  FreeAndNil(fHeightMapModificationToTargetHeight);
 
@@ -28753,7 +29134,8 @@ begin
     ((aInFlightFrameIndex>=0) and (abs(fHeightMapFlattenItems[aInFlightFrameIndex].TargetHeight)>1e-7)) or
     ((aInFlightFrameIndex>=0) and (abs(fHeightMapFlattenBeforeStateItems[aInFlightFrameIndex].TargetHeight)>1e-7)) or
     ((aInFlightFrameIndex>=0) and (fHeightMapModificationToTargetHeightItems[aInFlightFrameIndex].Active<>0)) or
-    ((aInFlightFrameIndex>=0) and (fHeightMapBrushSmoothItems[aInFlightFrameIndex].Active<>0)) then begin
+    ((aInFlightFrameIndex>=0) and (fHeightMapBrushSmoothItems[aInFlightFrameIndex].Active<>0)) or
+    ((aInFlightFrameIndex>=0) and (fHeightMapBrushSmearItems[aInFlightFrameIndex].Active<>0)) then begin
 
   if assigned(fVulkanDevice) then begin
 
@@ -28789,39 +29171,63 @@ begin
        ((abs(fHeightMapFlattenBeforeStateItems[aInFlightFrameIndex].TargetHeight)>1e-7) or
         (fHeightMapModificationToTargetHeightItems[aInFlightFrameIndex].Active<>0) or
         (fHeightMapBrushSmoothItems[aInFlightFrameIndex].Active<>0)) then begin
+
      if not fData.fHeightMapBeforeStateValid then begin
       CaptureHeightMapBeforeState(fVulkanUpdateCommandBuffer);
      end;
-    end;
 
-    if (aInFlightFrameIndex>=0) and (abs(fHeightMapFlattenBeforeStateItems[aInFlightFrameIndex].TargetHeight)>1e-7) then begin
-     try
-      fHeightMapFlattenBeforeState.fPushConstants.Vector:=TpvVector4.InlineableCreate(fHeightMapFlattenBeforeStateItems[aInFlightFrameIndex].Vector,fHeightMapFlattenBeforeStateItems[aInFlightFrameIndex].OuterRadius);
-      fHeightMapFlattenBeforeState.fPushConstants.InnerRadius:=fHeightMapFlattenBeforeStateItems[aInFlightFrameIndex].InnerRadius;
-      fHeightMapFlattenBeforeState.fPushConstants.OuterRadius:=fHeightMapFlattenBeforeStateItems[aInFlightFrameIndex].OuterRadius;
-      fHeightMapFlattenBeforeState.fPushConstants.TargetHeight:=fHeightMapFlattenBeforeStateItems[aInFlightFrameIndex].TargetHeight;
-      fHeightMapFlattenBeforeState.fPushConstants.BrushIndex:=fHeightMapFlattenBeforeStateItems[aInFlightFrameIndex].BrushIndex;
-      fHeightMapFlattenBeforeState.fPushConstants.BrushRotation:=fHeightMapFlattenBeforeStateItems[aInFlightFrameIndex].BrushRotation*TwoPI;
-      fHeightMapFlattenBeforeState.Execute(fVulkanUpdateCommandBuffer);
-     finally
-      fHeightMapFlattenBeforeStateItems[aInFlightFrameIndex].TargetHeight:=0.0;
+     if (aInFlightFrameIndex>=0) and (abs(fHeightMapFlattenBeforeStateItems[aInFlightFrameIndex].TargetHeight)>1e-7) then begin
+      try
+       fHeightMapFlattenBeforeState.fPushConstants.Vector:=TpvVector4.InlineableCreate(fHeightMapFlattenBeforeStateItems[aInFlightFrameIndex].Vector,fHeightMapFlattenBeforeStateItems[aInFlightFrameIndex].OuterRadius);
+       fHeightMapFlattenBeforeState.fPushConstants.InnerRadius:=fHeightMapFlattenBeforeStateItems[aInFlightFrameIndex].InnerRadius;
+       fHeightMapFlattenBeforeState.fPushConstants.OuterRadius:=fHeightMapFlattenBeforeStateItems[aInFlightFrameIndex].OuterRadius;
+       fHeightMapFlattenBeforeState.fPushConstants.TargetHeight:=fHeightMapFlattenBeforeStateItems[aInFlightFrameIndex].TargetHeight;
+       fHeightMapFlattenBeforeState.fPushConstants.BrushIndex:=fHeightMapFlattenBeforeStateItems[aInFlightFrameIndex].BrushIndex;
+       fHeightMapFlattenBeforeState.fPushConstants.BrushRotation:=fHeightMapFlattenBeforeStateItems[aInFlightFrameIndex].BrushRotation*TwoPI;
+       fHeightMapFlattenBeforeState.Execute(fVulkanUpdateCommandBuffer);
+      finally
+       fHeightMapFlattenBeforeStateItems[aInFlightFrameIndex].TargetHeight:=0.0;
+      end;
      end;
-    end;
 
-    if (aInFlightFrameIndex>=0) and (fHeightMapModificationToTargetHeightItems[aInFlightFrameIndex].Active<>0) then begin
-     try
-      fHeightMapModificationToTargetHeight.Execute(fVulkanUpdateCommandBuffer,fHeightMapModificationToTargetHeightItems[aInFlightFrameIndex]);
-     finally
-      fHeightMapModificationToTargetHeightItems[aInFlightFrameIndex].Active:=0;
+     if (aInFlightFrameIndex>=0) and (fHeightMapModificationToTargetHeightItems[aInFlightFrameIndex].Active<>0) then begin
+      try
+       fHeightMapModificationToTargetHeight.Execute(fVulkanUpdateCommandBuffer,fHeightMapModificationToTargetHeightItems[aInFlightFrameIndex]);
+      finally
+       fHeightMapModificationToTargetHeightItems[aInFlightFrameIndex].Active:=0;
+      end;
      end;
-    end;
 
-    if (aInFlightFrameIndex>=0) and (fHeightMapBrushSmoothItems[aInFlightFrameIndex].Active<>0) then begin
-     try
-      fHeightMapBrushSmooth.Execute(fVulkanUpdateCommandBuffer,fHeightMapBrushSmoothItems[aInFlightFrameIndex]);
-     finally
-      fHeightMapBrushSmoothItems[aInFlightFrameIndex].Active:=0;
+     if (aInFlightFrameIndex>=0) and (fHeightMapBrushSmoothItems[aInFlightFrameIndex].Active<>0) then begin
+      try
+       fHeightMapBrushSmooth.Execute(fVulkanUpdateCommandBuffer,fHeightMapBrushSmoothItems[aInFlightFrameIndex]);
+      finally
+       fHeightMapBrushSmoothItems[aInFlightFrameIndex].Active:=0;
+      end;
      end;
+
+     // Smear: auto-capture smear buffer on first use per stroke
+     if (aInFlightFrameIndex>=0) and (fHeightMapBrushSmearItems[aInFlightFrameIndex].Active<>0) then begin
+      if not fData.fHeightMapSmearBufferValid then begin
+       CaptureSmearBuffer(fVulkanUpdateCommandBuffer);
+      end;
+      try
+       fHeightMapBrushSmear.Execute(fVulkanUpdateCommandBuffer,fHeightMapBrushSmearItems[aInFlightFrameIndex]);
+      finally
+       fHeightMapBrushSmearItems[aInFlightFrameIndex].Active:=0;
+      end;
+     end;
+
+    end else begin
+
+     if fData.fHeightMapBeforeStateValid then begin
+      ReleaseHeightMapBeforeState;
+     end;
+
+     if fData.fHeightMapSmearBufferValid then begin
+      ReleaseSmearBuffer;
+     end;
+
     end;
 
     if fData.fHeightMapProcessedGeneration<>fData.fHeightMapGeneration then begin
@@ -29600,6 +30006,119 @@ begin
   Item^.Strength:=aStrength;
   Item^.KernelRadius:=aKernelRadius;
   Item^.Sigma:=Max(1e-4,aSigma);
+  Item^.BrushIndex:=aBrushIndex;
+  Item^.BrushRotation:=aBrushRotation;
+  Item^.Active:=1;
+ end;
+end;
+
+procedure TpvScene3DPlanet.CaptureSmearBuffer(const aCommandBuffer:TpvVulkanCommandBuffer);
+var SrcBarrier,DstBarrier:TVkImageMemoryBarrier;
+    ImageCopy:TVkImageCopy;
+begin
+ if not assigned(fData.fHeightMapSmearBufferImage) then begin
+  exit;
+ end;
+
+ // HeightMap: SHADER_READ_ONLY_OPTIMAL → TRANSFER_SRC
+ SrcBarrier:=TVkImageMemoryBarrier.Create(TVkAccessFlags(VK_ACCESS_SHADER_READ_BIT) or TVkAccessFlags(VK_ACCESS_SHADER_WRITE_BIT),
+                                          TVkAccessFlags(VK_ACCESS_TRANSFER_READ_BIT),
+                                          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                                          VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                                          VK_QUEUE_FAMILY_IGNORED,
+                                          VK_QUEUE_FAMILY_IGNORED,
+                                          fData.fHeightMapImage.VulkanImage.Handle,
+                                          TVkImageSubresourceRange.Create(TVkImageAspectFlags(VK_IMAGE_ASPECT_COLOR_BIT),0,1,0,1));
+
+ // SmearBuffer: GENERAL → TRANSFER_DST
+ DstBarrier:=TVkImageMemoryBarrier.Create(TVkAccessFlags(VK_ACCESS_SHADER_READ_BIT) or TVkAccessFlags(VK_ACCESS_SHADER_WRITE_BIT),
+                                          TVkAccessFlags(VK_ACCESS_TRANSFER_WRITE_BIT),
+                                          VK_IMAGE_LAYOUT_GENERAL,
+                                          VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                          VK_QUEUE_FAMILY_IGNORED,
+                                          VK_QUEUE_FAMILY_IGNORED,
+                                          fData.fHeightMapSmearBufferImage.VulkanImage.Handle,
+                                          TVkImageSubresourceRange.Create(TVkImageAspectFlags(VK_IMAGE_ASPECT_COLOR_BIT),0,1,0,1));
+
+ aCommandBuffer.CmdPipelineBarrier(TVkPipelineStageFlags(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT) or TVkPipelineStageFlags(VK_PIPELINE_STAGE_TRANSFER_BIT),
+                                   TVkPipelineStageFlags(VK_PIPELINE_STAGE_TRANSFER_BIT),
+                                   0,
+                                   0,nil,
+                                   0,nil,
+                                   1,@SrcBarrier);
+ aCommandBuffer.CmdPipelineBarrier(TVkPipelineStageFlags(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT) or TVkPipelineStageFlags(VK_PIPELINE_STAGE_TRANSFER_BIT),
+                                   TVkPipelineStageFlags(VK_PIPELINE_STAGE_TRANSFER_BIT),
+                                   0,
+                                   0,nil,
+                                   0,nil,
+                                   1,@DstBarrier);
+
+ FillChar(ImageCopy,SizeOf(TVkImageCopy),#0);
+ ImageCopy.srcSubresource.aspectMask:=TVkImageAspectFlags(VK_IMAGE_ASPECT_COLOR_BIT);
+ ImageCopy.srcSubresource.mipLevel:=0;
+ ImageCopy.srcSubresource.baseArrayLayer:=0;
+ ImageCopy.srcSubresource.layerCount:=1;
+ ImageCopy.dstSubresource:=ImageCopy.srcSubresource;
+ ImageCopy.extent.width:=fHeightMapResolution;
+ ImageCopy.extent.height:=fHeightMapResolution;
+ ImageCopy.extent.depth:=1;
+
+ aCommandBuffer.CmdCopyImage(fData.fHeightMapImage.VulkanImage.Handle,
+                             VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                             fData.fHeightMapSmearBufferImage.VulkanImage.Handle,
+                             VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                             1,@ImageCopy);
+
+ // HeightMap back: TRANSFER_SRC → SHADER_READ_ONLY_OPTIMAL
+ SrcBarrier:=TVkImageMemoryBarrier.Create(TVkAccessFlags(VK_ACCESS_TRANSFER_READ_BIT),
+                                          TVkAccessFlags(VK_ACCESS_SHADER_READ_BIT) or TVkAccessFlags(VK_ACCESS_SHADER_WRITE_BIT),
+                                          VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                                          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                                          VK_QUEUE_FAMILY_IGNORED,
+                                          VK_QUEUE_FAMILY_IGNORED,
+                                          fData.fHeightMapImage.VulkanImage.Handle,
+                                          TVkImageSubresourceRange.Create(TVkImageAspectFlags(VK_IMAGE_ASPECT_COLOR_BIT),0,1,0,1));
+
+ // SmearBuffer: TRANSFER_DST → GENERAL (stays GENERAL from here on)
+ DstBarrier:=TVkImageMemoryBarrier.Create(TVkAccessFlags(VK_ACCESS_TRANSFER_WRITE_BIT),
+                                          TVkAccessFlags(VK_ACCESS_SHADER_READ_BIT) or TVkAccessFlags(VK_ACCESS_SHADER_WRITE_BIT),
+                                          VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                          VK_IMAGE_LAYOUT_GENERAL,
+                                          VK_QUEUE_FAMILY_IGNORED,
+                                          VK_QUEUE_FAMILY_IGNORED,
+                                          fData.fHeightMapSmearBufferImage.VulkanImage.Handle,
+                                          TVkImageSubresourceRange.Create(TVkImageAspectFlags(VK_IMAGE_ASPECT_COLOR_BIT),0,1,0,1));
+
+ aCommandBuffer.CmdPipelineBarrier(TVkPipelineStageFlags(VK_PIPELINE_STAGE_TRANSFER_BIT),
+                                   TVkPipelineStageFlags(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT) or TVkPipelineStageFlags(VK_PIPELINE_STAGE_TRANSFER_BIT),
+                                   0,
+                                   0,nil,
+                                   0,nil,
+                                   1,@SrcBarrier);
+ aCommandBuffer.CmdPipelineBarrier(TVkPipelineStageFlags(VK_PIPELINE_STAGE_TRANSFER_BIT),
+                                   TVkPipelineStageFlags(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT),
+                                   0,
+                                   0,nil,
+                                   0,nil,
+                                   1,@DstBarrier);
+
+ fData.fHeightMapSmearBufferValid:=true;
+
+end;
+
+procedure TpvScene3DPlanet.ReleaseSmearBuffer;
+begin
+ fData.fHeightMapSmearBufferValid:=false;
+end;
+
+procedure TpvScene3DPlanet.EnqueueHeightMapBrushSmear(const aInFlightFrameIndex:TpvSizeInt;const aPosition:TpvVector3;const aRadius,aBorderRadius,aRate:TpvFloat;const aBrushIndex:TpvUInt32;const aBrushRotation:TpvFloat);
+var Item:PHeightMapBrushSmearItem;
+begin
+ if aInFlightFrameIndex>=0 then begin
+  Item:=@fHeightMapBrushSmearItems[aInFlightFrameIndex];
+  Item^.PositionRadius:=TpvVector4.Create(aPosition.Normalize,aRadius);
+  Item^.InnerRadius:=Max(1e-6,aBorderRadius);
+  Item^.Rate:=Clamp(aRate,0.0,1.0);
   Item^.BrushIndex:=aBrushIndex;
   Item^.BrushRotation:=aBrushRotation;
   Item^.Active:=1;

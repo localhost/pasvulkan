@@ -104,24 +104,26 @@ void main(){
         atomicOr(tileMapDirtyBuffer.data[tileMapIndex >> 5u], 1u << (tileMapIndex & 31u));
       } 
 
-      // Read base height from the frozen before-state snapshot instead of the live heightmap.
-      // This makes the operation idempotent: result = mix(beforeState, target, d).
+      // Read base height from the frozen before-state snapshot.
       float beforeHeight = texelFetch(uBeforeStateHeightMap, xy, 0).x;
+
+      // Current (already-painted) height this stroke.
+      float currentHeight = imageLoad(uImageHeightMap, texel).x;
+
+      float targetNorm = (pushConstants.targetHeight - (dot(p, n) * pushConstants.bottomRadius)) / (pushConstants.topRadius - pushConstants.bottomRadius);
+      float newHeight = clamp(mix(beforeHeight, targetNorm, d), pushConstants.minHeight, pushConstants.maxHeight);
+
+      // Monotonic: never regress from progress already made toward the target this stroke.
+      if(targetNorm >= beforeHeight){
+        newHeight = max(currentHeight, newHeight);
+      } else {
+        newHeight = min(currentHeight, newHeight);
+      }
   
       imageStore(
         uImageHeightMap, 
         texel, 
-        vec4(
-          clamp(
-            mix(
-              beforeHeight,
-              (pushConstants.targetHeight - (dot(p, n) * pushConstants.bottomRadius)) / (pushConstants.topRadius - pushConstants.bottomRadius), 
-              d
-            ), 
-            pushConstants.minHeight, 
-            pushConstants.maxHeight
-          )
-        )
+        vec4(newHeight)
       );
 
     }

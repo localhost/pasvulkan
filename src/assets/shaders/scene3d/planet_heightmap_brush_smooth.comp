@@ -73,6 +73,9 @@ void main(){
       // Read the before-state height at this texel.
       float beforeHeight = texelFetch(uBeforeStateHeightMap, xy, 0).x;
 
+      // Current (already-painted) height this stroke.
+      float currentHeight = imageLoad(uImageHeightMap, texel).x;
+
       // Compute Gaussian blur over the before-state snapshot.
       int   kernelRadius = int(pushConstants.innerRadiusStrengthKernelRadiusSigma.z);
       float sigma        = max(pushConstants.innerRadiusStrengthKernelRadiusSigma.w, 1e-4);
@@ -99,7 +102,9 @@ void main(){
       imageStore(
         uImageHeightMap,
         texel,
-        vec4(clamp(mix(beforeHeight, blurredHeight, d * strength), 0.0, 1.0))
+        // Mix from current (already-painted) toward blurred-before-state.
+        // Monotonically converges to blurred target; never regresses on re-visit.
+        vec4(clamp(mix(currentHeight, blurredHeight, d * strength), 0.0, 1.0))
       );
 
     }

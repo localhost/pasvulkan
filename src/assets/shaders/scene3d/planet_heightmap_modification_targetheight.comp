@@ -74,6 +74,9 @@ void main(){
       // Read height from the frozen before-state snapshot (start of brush stroke).
       float beforeHeight = texelFetch(uBeforeStateHeightMap, xy, 0).x;
 
+      // Current (already-painted) height this stroke.
+      float currentHeight = imageLoad(uImageHeightMap, texel).x;
+
       float targetHeight = pushConstants.innerRadiusTargetHeightStrengthUnused.y;
       float strength     = pushConstants.innerRadiusTargetHeightStrengthUnused.z;
 
@@ -88,10 +91,19 @@ void main(){
         delta = clamp(delta, signedMax, 0.0);
       }
 
+      float newHeight = clamp(beforeHeight + delta, 0.0, 1.0);
+
+      // Monotonic: never regress from progress already made toward the target this stroke.
+      if(targetHeight >= beforeHeight){
+        newHeight = max(currentHeight, newHeight);
+      } else {
+        newHeight = min(currentHeight, newHeight);
+      }
+
       imageStore(
         uImageHeightMap, 
         texel, 
-        vec4(clamp(beforeHeight + delta, 0.0, 1.0))
+        vec4(newHeight)
       );
 
     }

@@ -1,0 +1,97 @@
+#version 450 core
+
+#pragma shader_stage(compute)
+
+#extension GL_ARB_separate_shader_objects : enable
+#extension GL_ARB_shading_language_420pack : enable
+#extension GL_GOOGLE_include_directive : enable
+#extension GL_EXT_nonuniform_qualifier : enable
+
+/* clang-format off */
+
+// GIMP-style smudge / smear brush for planet heightmap.
+// Maintains a persistent "smear buffer" image (R32_SFLOAT, GENERAL layout) that
+// carries the smeared height value forward across mouse-move frames within a stroke.
+//
+// Per-texel algorithm (each thread owns exactly one texel, no race conditions):
+//   canvas_h  = current heightmap value
+//   smear_h   = smear buffer value (initialized from heightmap at brush-down)
+//   new_smear = mix(canvas_h, smear_h, rate)   -- buffer soaks up canvas
+//   new_canvas= mix(canvas_h, smear_h, d)       -- old buffer stamped onto canvas
+//
+// Holding the brush in one spot: smear_h converges toward canvas_h (rate<1 → gradual pickup).
+// Moving the brush: smeared height trails behind and gets deposited on the canvas.
+
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+layout(set = 0, binding = 0, r32f) uniform image2D uImageHeightMap;
+
+layout(set = 0, binding = 1) buffer TileMapDirtyBuffer {
+  uint data[];
+} tileMapDirtyBuffer;
+
+layout(set = 0, binding = 2) uniform sampler2DArray uBrushTextureArray[];
+
+// Smear buffer: persistent R32_SFLOAT image, stays in GENERAL layout across frames.
+layout(set = 0, binding = 3, r32f) uniform image2D uSmearBuffer;
+
+layout(push_constant) uniform PushConstants {
+  vec4 positionRadius;                             // xyz = brush center (unit sphere), w = outer radius
+  vec4 innerRadiusRateUnused;                      // x = inner radius, y = rate [0,1], z/w = unused
+  uvec4 tileMapResolutionShiftBrushIndexBrushRotation; // x = dirty size, y = shift, z = brush index, w = brush rotation (float bits)
+} pushConstants;
+
+/* clang-format on */
+
+#include "octahedral.glsl"
+#include "octahedralmap.glsl"
+#include "planet_brushes.glsl"
+
+void main(){
+
+  ivec2 texel = ivec2(gl_GlobalInvocationID.xy);
+
+  ivec2 texSize = imageSize(uImageHeightMap);
+
+  if(all(greaterThanEqual(texel, ivec2(0))) && all(lessThan(texel, texSize))){
+
+    vec3 p = octPlanetUnsignedDecode(vec2(texel) / vec2(texSize));
+
+    vec3 n = normalize(pushConstants.positionRadius.xyz);
+
+    float d = sampleBrush(
+      p,
+      n,
+      pushConstants.positionRadius.w,
+      pushConstants.innerRadiusRateUnused.x,
+      pushConstants.tileMapResolutionShiftBrushIndexBrushRotation.z,
+      uintBitsToFloat(pushConstants.tileMapResolutionShiftBrushIndexBrushRotation.w)
+    );
+
+    if(d > 0.0){
+
+      {
+        uvec2 tileMapXY = uvec2(texel) >> pushConstants.tileMapResolutionShiftBrushIndexBrushRotation.y;
+        uint tileMapIndex = (tileMapXY.y * pushConstants.tileMapResolutionShiftBrushIndexBrushRotation.x) + tileMapXY.x;
+        atomicOr(tileMapDirtyBuffer.data[tileMapIndex >> 5u], 1u << (tileMapIndex & 31u));
+      }
+
+      float canvas_h = imageLoad(uImageHeightMap, texel).x;
+      float smear_h  = imageLoad(uSmearBuffer, texel).x;
+
+      float rate = clamp(pushConstants.innerRadiusRateUnused.y, 0.0, 1.0);
+
+      // Buffer soaks up canvas (lower rate = more memory of the smeared value)
+      float new_smear  = mix(canvas_h, smear_h, rate);
+
+      // Stamp old smear buffer onto canvas, weighted by brush shape
+      float new_canvas = mix(canvas_h, smear_h, d);
+
+      imageStore(uImageHeightMap, texel, vec4(clamp(new_canvas, 0.0, 1.0)));
+      imageStore(uSmearBuffer,    texel, vec4(clamp(new_smear,  0.0, 1.0)));
+
+    }
+
+  }
+
+}
