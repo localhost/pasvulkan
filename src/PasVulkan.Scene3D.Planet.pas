@@ -282,6 +282,7 @@ type TpvScene3DPlanets=class;
             THeightMapBrushSmoothItems=array[0..MaxInFlightFrames-1] of THeightMapBrushSmoothItem;
             THeightMapBrushSmearItem=packed record
              PositionRadius:TpvVector4;
+             PreviousPosition:TpvVector4; // xyz = previous brush center on unit sphere, w = unused
              InnerRadius:TpvFloat;
              Rate:TpvFloat; // smear pickup rate [0,1]: higher = more memory of smeared value
              BrushIndex:TpvUInt32;
@@ -1617,6 +1618,7 @@ type TpvScene3DPlanets=class;
               type TPushConstants=packed record
                     PositionRadius:TpvVector4;        // xyz = position, w = outer radius
                     InnerRadiusRateUnused:TpvVector4; // x=innerRadius, y=rate, z/w=unused
+                    PreviousPosition:TpvVector4;      // xyz = previous brush center (unit sphere), w=unused
                     TileMapResolution:TpvUInt32;
                     TileMapShift:TpvUInt32;
                     BrushIndex:TpvUInt32;
@@ -2973,7 +2975,7 @@ type TpvScene3DPlanets=class;
        procedure EnqueueHeightMapBrushSmooth(const aInFlightFrameIndex:TpvSizeInt;const aPosition:TpvVector3;const aRadius,aBorderRadius,aStrength,aKernelRadius,aSigma:TpvFloat;const aBrushIndex:TpvUInt32;const aBrushRotation:TpvFloat);
        procedure CaptureSmearBuffer(const aCommandBuffer:TpvVulkanCommandBuffer);
        procedure ReleaseSmearBuffer;
-       procedure EnqueueHeightMapBrushSmear(const aInFlightFrameIndex:TpvSizeInt;const aPosition:TpvVector3;const aRadius,aBorderRadius,aRate:TpvFloat;const aBrushIndex:TpvUInt32;const aBrushRotation:TpvFloat);
+       procedure EnqueueHeightMapBrushSmear(const aInFlightFrameIndex:TpvSizeInt;const aPosition,aPreviousPosition:TpvVector3;const aRadius,aBorderRadius,aRate:TpvFloat;const aBrushIndex:TpvUInt32;const aBrushRotation:TpvFloat);
        procedure MarkAllTilesDirty;
        procedure EnqueueBlendMapModification(const aInFlightFrameIndex:TpvSizeInt;const aPosition:TpvVector3;const aRadius,aBorderRadius,aValue:TpvScalar;const aReplace:Boolean);
        procedure EnqueueGrassMapModification(const aInFlightFrameIndex:TpvSizeInt;const aPosition:TpvVector3;const aRadius,aBorderRadius,aValue:TpvScalar;const aOnlyIfEmpty:Boolean=false);
@@ -17485,6 +17487,7 @@ begin
 
   fPushConstants.PositionRadius:=TpvVector4.Create(0.0,1.0,0.0,0.0);
   fPushConstants.InnerRadiusRateUnused:=TpvVector4.Create(0.0,0.8,0.0,0.0);
+  fPushConstants.PreviousPosition:=TpvVector4.Create(0.0,1.0,0.0,0.0);
   fPushConstants.TileMapResolution:=fPlanet.fTileMapResolution;
   fPushConstants.TileMapShift:=fPlanet.fTileMapShift;
   fPushConstants.BrushIndex:=0;
@@ -17610,6 +17613,7 @@ begin
 
  fPushConstants.PositionRadius:=aItem.PositionRadius;
  fPushConstants.InnerRadiusRateUnused:=TpvVector4.InlineableCreate(Max(1e-6,aItem.InnerRadius),aItem.Rate,0.0,0.0);
+ fPushConstants.PreviousPosition:=aItem.PreviousPosition;
  fPushConstants.TileMapResolution:=fPlanet.fTileMapResolution;
  fPushConstants.TileMapShift:=fPlanet.fTileMapShift;
  fPushConstants.BrushIndex:=aItem.BrushIndex;
@@ -30112,12 +30116,13 @@ begin
  fData.fHeightMapSmearBufferValid:=false;
 end;
 
-procedure TpvScene3DPlanet.EnqueueHeightMapBrushSmear(const aInFlightFrameIndex:TpvSizeInt;const aPosition:TpvVector3;const aRadius,aBorderRadius,aRate:TpvFloat;const aBrushIndex:TpvUInt32;const aBrushRotation:TpvFloat);
+procedure TpvScene3DPlanet.EnqueueHeightMapBrushSmear(const aInFlightFrameIndex:TpvSizeInt;const aPosition,aPreviousPosition:TpvVector3;const aRadius,aBorderRadius,aRate:TpvFloat;const aBrushIndex:TpvUInt32;const aBrushRotation:TpvFloat);
 var Item:PHeightMapBrushSmearItem;
 begin
  if aInFlightFrameIndex>=0 then begin
   Item:=@fHeightMapBrushSmearItems[aInFlightFrameIndex];
   Item^.PositionRadius:=TpvVector4.Create(aPosition.Normalize,aRadius);
+  Item^.PreviousPosition:=TpvVector4.Create(aPreviousPosition.Normalize,0.0);
   Item^.InnerRadius:=Max(1e-6,aBorderRadius);
   Item^.Rate:=Clamp(aRate,0.0,1.0);
   Item^.BrushIndex:=aBrushIndex;
