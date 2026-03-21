@@ -29170,7 +29170,8 @@ begin
     if (aInFlightFrameIndex>=0) and
        ((abs(fHeightMapFlattenBeforeStateItems[aInFlightFrameIndex].TargetHeight)>1e-7) or
         (fHeightMapModificationToTargetHeightItems[aInFlightFrameIndex].Active<>0) or
-        (fHeightMapBrushSmoothItems[aInFlightFrameIndex].Active<>0)) then begin
+        (fHeightMapBrushSmoothItems[aInFlightFrameIndex].Active<>0) or
+        (fHeightMapBrushSmearItems[aInFlightFrameIndex].Active<>0)) then begin
 
      if not fData.fHeightMapBeforeStateValid then begin
       CaptureHeightMapBeforeState(fVulkanUpdateCommandBuffer);
