@@ -16887,10 +16887,10 @@ begin
                                   0);
   fDescriptorSetLayout.AddBinding(2,
                                   TVkDescriptorType(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER),
-                                  1,
+                                  16,
                                   TVkShaderStageFlags(VK_SHADER_STAGE_COMPUTE_BIT),
                                   [],
-                                  TVkDescriptorBindingFlags(VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT));
+                                  0);
   fDescriptorSetLayout.AddBinding(3,
                                   TVkDescriptorType(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER),
                                   1,
@@ -16911,7 +16911,7 @@ begin
                                                   1);
   fDescriptorPool.AddDescriptorPoolSize(TVkDescriptorType(VK_DESCRIPTOR_TYPE_STORAGE_IMAGE),1);
   fDescriptorPool.AddDescriptorPoolSize(TVkDescriptorType(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER),1);
-  fDescriptorPool.AddDescriptorPoolSize(TVkDescriptorType(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER),2);
+  fDescriptorPool.AddDescriptorPoolSize(TVkDescriptorType(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER),17);
   fDescriptorPool.Initialize;
   fPlanet.fVulkanDevice.DebugUtils.SetObjectName(fDescriptorPool.Handle,VK_OBJECT_TYPE_DESCRIPTOR_POOL,'TpvScene3DPlanet.THeightMapModificationToTargetHeight.fDescriptorPool');
 
@@ -16938,11 +16938,9 @@ begin
                                       false);
   fDescriptorSet.WriteToDescriptorSet(2,
                                       0,
-                                      1,
+                                      16,
                                       TVkDescriptorType(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER),
-                                      [TVkDescriptorImageInfo.Create(TpvScene3D(fPlanet.fScene3D).GeneralComputeSampler.Handle,
-                                                                     fPlanet.fBrushesTexture.ImageView.Handle,
-                                                                     VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)],
+                                      fPlanet.GetBrushesTexturesDescriptorImageInfos,
                                       [],
                                       [],
                                       false);
@@ -17145,10 +17143,10 @@ begin
                                   0);
   fDescriptorSetLayout.AddBinding(2,
                                   TVkDescriptorType(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER),
-                                  1,
+                                  16,
                                   TVkShaderStageFlags(VK_SHADER_STAGE_COMPUTE_BIT),
                                   [],
-                                  TVkDescriptorBindingFlags(VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT));
+                                  0);
   fDescriptorSetLayout.AddBinding(3,
                                   TVkDescriptorType(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER),
                                   1,
@@ -17169,7 +17167,7 @@ begin
                                                   1);
   fDescriptorPool.AddDescriptorPoolSize(TVkDescriptorType(VK_DESCRIPTOR_TYPE_STORAGE_IMAGE),1);
   fDescriptorPool.AddDescriptorPoolSize(TVkDescriptorType(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER),1);
-  fDescriptorPool.AddDescriptorPoolSize(TVkDescriptorType(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER),2);
+  fDescriptorPool.AddDescriptorPoolSize(TVkDescriptorType(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER),17);
   fDescriptorPool.Initialize;
   fPlanet.fVulkanDevice.DebugUtils.SetObjectName(fDescriptorPool.Handle,VK_OBJECT_TYPE_DESCRIPTOR_POOL,'TpvScene3DPlanet.THeightMapBrushSmooth.fDescriptorPool');
 
@@ -17196,11 +17194,9 @@ begin
                                       false);
   fDescriptorSet.WriteToDescriptorSet(2,
                                       0,
-                                      1,
+                                      16,
                                       TVkDescriptorType(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER),
-                                      [TVkDescriptorImageInfo.Create(TpvScene3D(fPlanet.fScene3D).GeneralComputeSampler.Handle,
-                                                                     fPlanet.fBrushesTexture.ImageView.Handle,
-                                                                     VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)],
+                                      fPlanet.GetBrushesTexturesDescriptorImageInfos,
                                       [],
                                       [],
                                       false);
@@ -17403,10 +17399,10 @@ begin
                                   0);
   fDescriptorSetLayout.AddBinding(2,
                                   TVkDescriptorType(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER),
-                                  1,
+                                  16,
                                   TVkShaderStageFlags(VK_SHADER_STAGE_COMPUTE_BIT),
                                   [],
-                                  TVkDescriptorBindingFlags(VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT));
+                                  0);
   // Binding 3: smear buffer — STORAGE_IMAGE (GENERAL, read+write in same dispatch)
   fDescriptorSetLayout.AddBinding(3,
                                   TVkDescriptorType(VK_DESCRIPTOR_TYPE_STORAGE_IMAGE),
@@ -17428,7 +17424,7 @@ begin
                                                   1);
   fDescriptorPool.AddDescriptorPoolSize(TVkDescriptorType(VK_DESCRIPTOR_TYPE_STORAGE_IMAGE),2);
   fDescriptorPool.AddDescriptorPoolSize(TVkDescriptorType(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER),1);
-  fDescriptorPool.AddDescriptorPoolSize(TVkDescriptorType(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER),1);
+  fDescriptorPool.AddDescriptorPoolSize(TVkDescriptorType(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER),16);
   fDescriptorPool.Initialize;
   fPlanet.fVulkanDevice.DebugUtils.SetObjectName(fDescriptorPool.Handle,VK_OBJECT_TYPE_DESCRIPTOR_POOL,'TpvScene3DPlanet.THeightMapBrushSmear.fDescriptorPool');
 
@@ -17455,11 +17451,9 @@ begin
                                       false);
   fDescriptorSet.WriteToDescriptorSet(2,
                                       0,
-                                      1,
+                                      16,
                                       TVkDescriptorType(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER),
-                                      [TVkDescriptorImageInfo.Create(TpvScene3D(fPlanet.fScene3D).GeneralComputeSampler.Handle,
-                                                                     fPlanet.fBrushesTexture.ImageView.Handle,
-                                                                     VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)],
+                                      fPlanet.GetBrushesTexturesDescriptorImageInfos,
                                       [],
                                       [],
                                       false);
@@ -29993,7 +29987,7 @@ begin
   Item:=@fHeightMapModificationToTargetHeightItems[aInFlightFrameIndex];
   Item^.PositionRadius:=TpvVector4.Create(aPosition.Normalize,aRadius);
   Item^.InnerRadius:=Max(1e-6,aBorderRadius);
-  Item^.TargetHeight:=aTargetHeight;
+  Item^.TargetHeight:=(aTargetHeight-fBottomRadius)/(fTopRadius-fBottomRadius);
   Item^.Strength:=aStrength;
   Item^.BrushIndex:=aBrushIndex;
   Item^.BrushRotation:=aBrushRotation;
