@@ -84,11 +84,11 @@ void main(){
       float newHeight = clamp(mix(beforeHeight, targetHeight, d), 0.0, 1.0);
 
       // Monotonic: never regress from progress already made toward the target this stroke.
-      if(targetHeight >= beforeHeight){
+/*    if(targetHeight >= beforeHeight){
         newHeight = max(currentHeight, newHeight);
       } else {
         newHeight = min(currentHeight, newHeight);
-      }
+      }*/
 
       imageStore(
         uImageHeightMap, 
