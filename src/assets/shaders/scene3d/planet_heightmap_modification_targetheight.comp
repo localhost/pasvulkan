@@ -78,20 +78,10 @@ void main(){
       float currentHeight = imageLoad(uImageHeightMap, texel).x;
 
       float targetHeight = pushConstants.innerRadiusTargetHeightStrengthUnused.y;
-      float strength     = pushConstants.innerRadiusTargetHeightStrengthUnused.z;
+//    float strength     = pushConstants.innerRadiusTargetHeightStrengthUnused.z; // unused for now
 
-      // Signed delta from before-state toward target, scaled by brush and strength.
-      float delta = (targetHeight - beforeHeight) * d * strength;
-
-      // Prevent overshooting: clamp delta so movement never crosses the target.
-      float signedMax = targetHeight - beforeHeight; // positive when raising, negative when lowering
-      if(signedMax >= 0.0){
-        delta = clamp(delta, 0.0, signedMax);
-      }else{
-        delta = clamp(delta, signedMax, 0.0);
-      }
-
-      float newHeight = clamp(beforeHeight + delta, 0.0, 1.0);
+      // Lerp from before-state toward target by brush weight.
+      float newHeight = clamp(mix(beforeHeight, targetHeight, d), 0.0, 1.0);
 
       // Monotonic: never regress from progress already made toward the target this stroke.
       if(targetHeight >= beforeHeight){

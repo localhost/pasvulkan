@@ -29987,7 +29987,7 @@ begin
   Item:=@fHeightMapModificationToTargetHeightItems[aInFlightFrameIndex];
   Item^.PositionRadius:=TpvVector4.Create(aPosition.Normalize,aRadius);
   Item^.InnerRadius:=Max(1e-6,aBorderRadius);
-  Item^.TargetHeight:=(aTargetHeight-fBottomRadius)/(fTopRadius-fBottomRadius);
+  Item^.TargetHeight:=aTargetHeight;
   Item^.Strength:=aStrength;
   Item^.BrushIndex:=aBrushIndex;
   Item^.BrushRotation:=aBrushRotation;
