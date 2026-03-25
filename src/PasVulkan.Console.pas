@@ -94,7 +94,7 @@ type { TpvConsole }
              CursorShape:TpvUInt8;
              CurPos:TPoint;
              Color:TpvUInt8;
-            end;  
+            end;
             PCursorInfo=^TCursorInfo;
             TConsoleBuffer=array of TpvUInt32;
             PConsoleBuffer=^TConsoleBuffer;
@@ -141,9 +141,9 @@ type { TpvConsole }
                (r:1.0000;g:1.0000;b:1.0000;a:1.0000)
               );
       private
-       fCanvas:TpvCanvas;   
+       fCanvas:TpvCanvas;
        fScrollBuffer:TConsoleBuffer;
-       fRawBuffer:TConsoleBuffer;                  
+       fRawBuffer:TConsoleBuffer;
        fColumns:TpvSizeInt;
        fRows:TpvSizeInt;
        fCharWidth:TpvSizeInt;
@@ -166,7 +166,7 @@ type { TpvConsole }
        fWindMax:TpvUInt32;
        fCursor:TCursorInfo;
        fInternalWidth:TpvSizeInt;
-       fInternalHeight:TpvSizeInt; 
+       fInternalHeight:TpvSizeInt;
        fLines:TUTF8StringList;
        fHistory:TUTF8StringList;
        fHistoryIndex:TpvSizeInt;
@@ -182,6 +182,12 @@ type { TpvConsole }
        fOnDrawRect:TOnDrawRect;
        fOnDrawCodePoint:TOnDrawCodePoint;
        fHistoryFileName:String;
+       fReverseSearchMode:Boolean;
+       fReverseSearchQuery:TpvUTF8String;
+       fReverseSearchIndex:TpvSizeInt;
+       fReverseSearchMatches:array of TpvSizeInt;
+       fReverseSearchMatchPosition:TpvSizeInt;
+       fReverseSearchOriginalLine:TpvUTF8String;
       public
        constructor Create;
        destructor Destroy; override;
@@ -228,6 +234,11 @@ type { TpvConsole }
        procedure KeyClearScreen;
        procedure KeySwapCurrentCodePointWithPreviousCodePoint;
        procedure KeyChar(const aCodePoint:TpvUInt32);
+       procedure KeyReverseSearch;
+       procedure ReverseSearchUpdateMatches;
+       procedure ReverseSearchExit(const aAccept:Boolean);
+       procedure ReverseSearchAddChar(const aCodePoint:TpvUInt32);
+       procedure ReverseSearchBackspace;
        function GetBuffer(const aColumn,aRow:TpvSizeInt;out aCodePoint:TpvUInt32;out aForegroundColor,aBackgroundColor:TpvSizeInt;out aBlink:Boolean):boolean;
        procedure Draw(const aDeltaTime:TpvDouble);
        function KeyEvent(const aKeyEvent:TpvApplicationInputKeyEvent):boolean;
@@ -278,7 +289,7 @@ begin
 
  fScrollBuffer:=nil;
  fRawBuffer:=nil;
- 
+
  fCharWidth:=8;
  fCharHeight:=16;
  fColumns:=0;
@@ -335,6 +346,12 @@ begin
 
  fOnDrawCodePoint:=nil;
 
+ fReverseSearchMode:=false;
+ fReverseSearchQuery:='';
+ fReverseSearchIndex:=-1;
+ fReverseSearchMatches:=nil;
+ fReverseSearchMatchPosition:=-1;
+ fReverseSearchOriginalLine:='';
 end;
 
 destructor TpvConsole.Destroy;
@@ -397,55 +414,94 @@ begin
       end;
       inc(x);
      end;
-    end; 
+    end;
    end;
   end;
  end;
- c:=15;
- y:=fRows-1;
- x:=0;
- o:=(y*fColumns)+x;
- fRawBuffer[o shl 1]:=TpvUInt8(ansichar(']'));
- fRawBuffer[(o shl 1) or 1]:=c;
- if fLinePosition<fLineFirstPosition then begin
-  fLineFirstPosition:=fLinePosition;
- end else begin
-  LineFirstPositionCodePoint:=PUCUUTF8GetCodePoint(fLine,fLineFirstPosition);
-  LinePositionCodePoint:=PUCUUTF8GetCodePoint(fLine,fLinePosition);
-  if (LineFirstPositionCodePoint+(fColumns-2))<=LinePositionCodePoint then begin
-   fLineFirstPosition:=PUCUUTF8GetCodeUnit(fLine,Max(0,LinePositionCodePoint-(fColumns-2)));
-   if fLineFirstPosition>length(fLine) then begin
-    fLineFirstPosition:=length(fLine);
+  c:=15;
+  y:=fRows-1;
+  x:=0;
+  if fReverseSearchMode then begin
+   s:='(reverse-i-search)`'+fReverseSearchQuery+''': ';
+   if (fReverseSearchIndex>=0) and (fReverseSearchIndex<length(fReverseSearchMatches)) then begin
+    s:=s+fLine;
+   end else begin
+    s:=s+'# no match found';
    end;
-   if fLineFirstPosition<1 then begin
+   k:=1;
+   l:=length(s);
+   x:=0;
+   m:=0;
+   while (k<=l) and (x<fColumns) do begin
+    u32:=PUCUUTF8CodeUnitGetCharAndIncFallback(s,k);
+    o:=(y*fColumns)+x;
+    if (fReverseSearchMatchPosition>0) and (m>0) and (m>=fReverseSearchMatchPosition) and (m<(fReverseSearchMatchPosition+length(fReverseSearchQuery))) then begin
+     fRawBuffer[o shl 1]:=u32;
+     fRawBuffer[(o shl 1) or 1]:=14;
+    end else begin
+     fRawBuffer[o shl 1]:=u32;
+     fRawBuffer[(o shl 1) or 1]:=c;
+    end;
+    inc(x);
+    if m>=0 then begin
+     inc(m);
+    end;
+    if (m=0) and (u32=TpvUInt8(ansichar(':'))) and (k<l) then begin
+     u32:=PUCUUTF8CodeUnitGetCharAndIncFallback(s,k);
+     o:=(y*fColumns)+x;
+     fRawBuffer[o shl 1]:=u32;
+     fRawBuffer[(o shl 1) or 1]:=c;
+     inc(x);
+     m:=1;
+    end;
+   end;
+   fCursor.CurPos.Column:=x;
+   fCursor.CurPos.Row:=fRows;
+   fCursorOn:=false;
+  end else begin
+   o:=(y*fColumns)+x;
+   fRawBuffer[o shl 1]:=TpvUInt8(ansichar(']'));
+   fRawBuffer[(o shl 1) or 1]:=c;
+   if fLinePosition<fLineFirstPosition then begin
+    fLineFirstPosition:=fLinePosition;
+   end else begin
+    LineFirstPositionCodePoint:=PUCUUTF8GetCodePoint(fLine,fLineFirstPosition);
+    LinePositionCodePoint:=PUCUUTF8GetCodePoint(fLine,fLinePosition);
+    if (LineFirstPositionCodePoint+(fColumns-2))<=LinePositionCodePoint then begin
+     fLineFirstPosition:=PUCUUTF8GetCodeUnit(fLine,Max(0,LinePositionCodePoint-(fColumns-2)));
+     if fLineFirstPosition>length(fLine) then begin
+      fLineFirstPosition:=length(fLine);
+     end;
+     if fLineFirstPosition<1 then begin
+      fLineFirstPosition:=1;
+     end;
+    end;
+   end;
+   if fLineFirstPosition<=length(fLine) then begin
+    i:=fLineFirstPosition;
+    j:=2;
+    while i<=length(fLine) do begin
+     u32:=PUCUUTF8CodeUnitGetCharAndIncFallback(fLine,i);
+     if j<=fColumns then begin
+      o:=(y*fColumns)+(j-1);
+      fRawBuffer[o shl 1]:=u32;
+      fRawBuffer[(o shl 1) or 1]:=c;
+     end;
+     inc(j);
+    end;
+   end else begin
     fLineFirstPosition:=1;
    end;
-  end;
- end;
- if fLineFirstPosition<=length(fLine) then begin
-  i:=fLineFirstPosition;
-  j:=2;
-  while i<=length(fLine) do begin
-   u32:=PUCUUTF8CodeUnitGetCharAndIncFallback(fLine,i);
-   if j<=fColumns then begin
-    o:=(y*fColumns)+(j-1);
-    fRawBuffer[o shl 1]:=u32;
-    fRawBuffer[(o shl 1) or 1]:=c;
+   fCursorOn:=true;
+   j:=2+(PUCUUTF8GetCodePoint(fLine,fLinePosition)-PUCUUTF8GetCodePoint(fLine,fLineFirstPosition));
+   if j>fColumns then begin
+    j:=fColumns;
+    fCursorOn:=false;
    end;
-   inc(j);
+   fCursor.CurPos.Column:=j;
+   fCursor.CurPos.Row:=fRows;
   end;
- end else begin
-  fLineFirstPosition:=1;
  end;
- fCursorOn:=true;
- j:=2+(PUCUUTF8GetCodePoint(fLine,fLinePosition)-PUCUUTF8GetCodePoint(fLine,fLineFirstPosition));
- if j>fColumns then begin
-  j:=fColumns;
-  fCursorOn:=false;
- end;
- fCursor.CurPos.Column:=j;
- fCursor.CurPos.Row:=fRows;
-end;
 
 procedure TpvConsole.ScrollOn;
 begin
@@ -484,10 +540,10 @@ begin
    for y:=1 to x do begin
     if p>l then begin
      break;
-    end else begin 
+    end else begin
      c:=PUCUUTF8CodeUnitGetCharAndIncFallback(S,p);
      case c of
-      10,13,32:begin        
+      10,13,32:begin
        fScrollBuffer[ScrollPos]:=0;
       end;
       else begin
@@ -496,7 +552,7 @@ begin
      end;
      fScrollBuffer[ScrollPos+1]:=15;
      inc(ScrollPos,2);
-    end; 
+    end;
    end;
   end;
   fCurrentBuffer:=@fScrollBuffer;
@@ -600,7 +656,7 @@ begin
  end else begin
   fCursor.CurPos.Row:=aY;
  end;
-end; 
+end;
 
 function TpvConsole.WhereX:TpvSizeInt;
 begin
@@ -924,6 +980,9 @@ end;
 procedure TpvConsole.KeyEnter;
 var OK:boolean;
 begin
+ if fReverseSearchMode then begin
+  ReverseSearchExit(true);
+ end;
  OK:=length(trim(fLine))>0;
  if OK then begin
   if fIgnoreDuplicateHistoryEntries and (fHistory.Count>0) and (fHistory.Items[fHistory.Count-1]=fLine) then begin
@@ -934,7 +993,7 @@ begin
    fHistoryIndex:=fHistory.Count;
    if length(fHistoryFileName)>0 then begin
     AppendToHistoryFileName(fHistoryFileName,fLine);
-   end; 
+   end;
   end;
   OK:=true;
  end;
@@ -950,10 +1009,14 @@ end;
 
 procedure TpvConsole.KeyEscape;
 begin
- fLinePosition:=1;
- fLineFirstPosition:=1;
- fLine:='';
- fHistoryIndex:=fHistory.Count;
+ if fReverseSearchMode then begin
+  ReverseSearchExit(false);
+ end else begin
+  fLinePosition:=1;
+  fLineFirstPosition:=1;
+  fLine:='';
+  fHistoryIndex:=fHistory.Count;
+ end;
  fCursorTimeAccumulator:=0.0;
 end;
 
@@ -991,22 +1054,26 @@ end;
 
 procedure TpvConsole.KeyBackspace;
 var //CodeUnitLength:TpvSizeInt;
-    i:TPUCUInt32; 
+    i:TPUCUInt32;
 begin
- LinePositionClip;
- if fLinePosition>length(fLine) then begin
-  i:=length(fLine)+1;
-  PUCUUTF8Dec(fLine,i);
-  fLine:=copy(fLine,1,i-1);
-  fLinePosition:=length(fLine)+1;
+ if fReverseSearchMode then begin
+  ReverseSearchBackspace;
  end else begin
-  i:=fLinePosition;
-  PUCUUTF8Dec(fLine,i);
-  Delete(fLine,i,fLinePosition-i);
-  fLinePosition:=i;
   LinePositionClip;
+  if fLinePosition>length(fLine) then begin
+   i:=length(fLine)+1;
+   PUCUUTF8Dec(fLine,i);
+   fLine:=copy(fLine,1,i-1);
+   fLinePosition:=length(fLine)+1;
+  end else begin
+   i:=fLinePosition;
+   PUCUUTF8Dec(fLine,i);
+   Delete(fLine,i,fLinePosition-i);
+   fLinePosition:=i;
+   LinePositionClip;
+  end;
+  fHistoryIndex:=fHistory.Count;
  end;
- fHistoryIndex:=fHistory.Count;
  fCursorTimeAccumulator:=0.0;
 end;
 
@@ -1134,28 +1201,145 @@ procedure TpvConsole.KeyChar(const aCodePoint:TpvUInt32);
 var s:TPUCURawByteString;
     CodeUnitLength:TpvSizeInt;
 begin
- LinePositionClip;
- s:=PUCUUTF32CharToUTF8(aCodePoint);
- if Overwrite then begin
-  if fLinePosition>length(fLine) then begin
-   fLine:=fLine+s;
-   fLinePosition:=length(fLine)+length(s);
+ if fReverseSearchMode then begin
+  ReverseSearchAddChar(aCodePoint);
+ end else begin
+  LinePositionClip;
+  s:=PUCUUTF32CharToUTF8(aCodePoint);
+  if Overwrite then begin
+   if fLinePosition>length(fLine) then begin
+    fLine:=fLine+s;
+    fLinePosition:=length(fLine)+length(s);
+   end else begin
+    CodeUnitLength:=PUCUUTF8GetCharLen(fLine,fLinePosition);
+    Delete(fLine,fLinePosition,CodeUnitLength);
+    Insert(s,fLine,fLinePosition);
+    inc(fLinePosition,length(s));
+   end;
   end else begin
-   CodeUnitLength:=PUCUUTF8GetCharLen(fLine,fLinePosition);
-   Delete(fLine,fLinePosition,CodeUnitLength);
-   Insert(s,fLine,fLinePosition);
-   inc(fLinePosition,length(s));
+   if fLinePosition>length(fLine) then begin
+    fLine:=fLine+s;
+    fLinePosition:=length(fLine)+length(s);
+   end else begin
+    Insert(s,fLine,fLinePosition);
+    inc(fLinePosition,length(s));
+   end;
+  end;
+  fHistoryIndex:=fHistory.Count;
+ end;
+ fCursorTimeAccumulator:=0.0;
+end;
+
+procedure TpvConsole.KeyReverseSearch;
+begin
+ if not fReverseSearchMode then begin
+  fReverseSearchMode:=true;
+  fReverseSearchQuery:='';
+  fReverseSearchIndex:=-1;
+  fReverseSearchMatches:=nil;
+  fReverseSearchMatchPosition:=-1;
+  fReverseSearchOriginalLine:=fLine;
+  ReverseSearchUpdateMatches;
+ end else begin
+  if (fReverseSearchIndex>=0) and (fReverseSearchIndex<length(fReverseSearchMatches)-1) then begin
+   inc(fReverseSearchIndex);
+   if (fReverseSearchIndex>=0) and (fReverseSearchIndex<length(fReverseSearchMatches)) then begin
+    fLine:=fHistory.Items[fReverseSearchMatches[fReverseSearchIndex]];
+    fLinePosition:=length(fLine)+1;
+    fLineFirstPosition:=1;
+   end;
+  end;
+ end;
+ fCursorTimeAccumulator:=0.0;
+end;
+
+procedure TpvConsole.ReverseSearchUpdateMatches;
+var i,MatchPos:TpvSizeInt;
+    HistoryItem,LowerQuery,LowerItem:TpvUTF8String;
+begin
+ SetLength(fReverseSearchMatches,0);
+ fReverseSearchIndex:=-1;
+ fReverseSearchMatchPosition:=-1;
+ if length(fReverseSearchQuery)=0 then begin
+  if fHistory.Count>0 then begin
+   SetLength(fReverseSearchMatches,1);
+   fReverseSearchMatches[0]:=fHistory.Count-1;
+   fReverseSearchIndex:=0;
+   fReverseSearchMatchPosition:=1;
+   fLine:=fHistory.Items[fHistory.Count-1];
+   fLinePosition:=length(fLine)+1;
+   fLineFirstPosition:=1;
+  end else begin
+   fLine:='';
+   fLinePosition:=1;
+   fLineFirstPosition:=1;
   end;
  end else begin
-  if fLinePosition>length(fLine) then begin
-   fLine:=fLine+s;
-   fLinePosition:=length(fLine)+length(s);
-  end else begin
-   Insert(s,fLine,fLinePosition);
-   inc(fLinePosition,length(s));
+  LowerQuery:=LowerCase(fReverseSearchQuery);
+  for i:=fHistory.Count-1 downto 0 do begin
+   HistoryItem:=fHistory.Items[i];
+   LowerItem:=LowerCase(HistoryItem);
+   MatchPos:=Pos(LowerQuery,LowerItem);
+   if MatchPos>0 then begin
+    SetLength(fReverseSearchMatches,length(fReverseSearchMatches)+1);
+    fReverseSearchMatches[length(fReverseSearchMatches)-1]:=i;
+    if fReverseSearchIndex<0 then begin
+     fReverseSearchIndex:=length(fReverseSearchMatches)-1;
+     fReverseSearchMatchPosition:=MatchPos;
+     fLine:=HistoryItem;
+     fLinePosition:=length(fLine)+1;
+     fLineFirstPosition:=1;
+    end;
+   end;
   end;
- end; 
- fHistoryIndex:=fHistory.Count;
+  if fReverseSearchIndex<0 then begin
+   fLine:='';
+   fLinePosition:=1;
+   fLineFirstPosition:=1;
+  end;
+ end;
+ fCursorTimeAccumulator:=0.0;
+end;
+
+procedure TpvConsole.ReverseSearchExit(const aAccept:Boolean);
+begin
+ if fReverseSearchMode then begin
+  fReverseSearchMode:=false;
+  if not aAccept then begin
+   fLine:=fReverseSearchOriginalLine;
+   fLinePosition:=length(fLine)+1;
+   fLineFirstPosition:=1;
+  end;
+  fReverseSearchQuery:='';
+  fReverseSearchIndex:=-1;
+  fReverseSearchMatches:=nil;
+  fReverseSearchMatchPosition:=-1;
+  fReverseSearchOriginalLine:='';
+  fHistoryIndex:=fHistory.Count;
+ end;
+ fCursorTimeAccumulator:=0.0;
+end;
+
+procedure TpvConsole.ReverseSearchAddChar(const aCodePoint:TpvUInt32);
+var s:TPUCURawByteString;
+begin
+ s:=PUCUUTF32CharToUTF8(aCodePoint);
+ fReverseSearchQuery:=fReverseSearchQuery+s;
+ ReverseSearchUpdateMatches;
+ fCursorTimeAccumulator:=0.0;
+end;
+
+procedure TpvConsole.ReverseSearchBackspace;
+var i:TPUCUInt32;
+begin
+ if length(fReverseSearchQuery)>0 then begin
+  i:=length(fReverseSearchQuery)+1;
+  PUCUUTF8Dec(fReverseSearchQuery,i);
+  fReverseSearchQuery:=copy(fReverseSearchQuery,1,i-1);
+  ReverseSearchUpdateMatches;
+ end else begin
+  ReverseSearchExit(false);
+ end;
  fCursorTimeAccumulator:=0.0;
 end;
 
@@ -1428,16 +1612,44 @@ begin
       result:=true;
      end;
     end;
-    KEYCODE_T:begin
-     if TpvApplicationInputKeyModifier.CTRL in aKeyEvent.KeyModifiers then begin
-      KeySwapCurrentCodePointWithPreviousCodePoint;
-      UpdateScreen;
-      result:=true;
+     KEYCODE_T:begin
+      if TpvApplicationInputKeyModifier.CTRL in aKeyEvent.KeyModifiers then begin
+       KeySwapCurrentCodePointWithPreviousCodePoint;
+       UpdateScreen;
+       result:=true;
+      end;
      end;
-    end;
-    else begin
+     KEYCODE_R:begin
+      if TpvApplicationInputKeyModifier.CTRL in aKeyEvent.KeyModifiers then begin
+       KeyReverseSearch;
+       UpdateScreen;
+       result:=true;
+      end;
+     end;
+     KEYCODE_C:begin
+      if TpvApplicationInputKeyModifier.CTRL in aKeyEvent.KeyModifiers then begin
+       if fReverseSearchMode then begin
+        ReverseSearchExit(false);
+       end else begin
+        fLine:='';
+        fLinePosition:=1;
+        fLineFirstPosition:=1;
+        fHistoryIndex:=fHistory.Count;
+       end;
+       UpdateScreen;
+       result:=true;
+      end;
+     end;
+     KEYCODE_G:begin
+      if (TpvApplicationInputKeyModifier.CTRL in aKeyEvent.KeyModifiers) and fReverseSearchMode then begin
+       ReverseSearchExit(false);
+       UpdateScreen;
+       result:=true;
+      end;
+     end;
+     else begin
 //   KeyChar(aKeyEvent.KeyCode);
-    end;
+     end;
    end;
   end;
   TpvApplicationInputKeyEventType.Unicode:begin
@@ -1488,7 +1700,7 @@ begin
  finally
   FreeAndNil(MemoryStream);
  end;
-end; 
+end;
 
 procedure TpvConsole.SaveHistoryToStream(const aStream:TStream);
 var i,l:TPUCUInt32;
