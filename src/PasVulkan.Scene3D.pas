@@ -23435,7 +23435,9 @@ var FBXScene:TpvFBXScene;
           break;
          end;
         end;
-        if BelongsToStack then break;
+        if BelongsToStack then begin
+         break;
+        end;
        end;
       end;
       if (not BelongsToStack) and (FBXScene.AnimationStackList.Count=1) then begin
@@ -23447,8 +23449,12 @@ var FBXScene:TpvFBXScene;
        CurveZ:=GetCurveFromCurveNode(CurveNode,'z');
        if assigned(CurveX) and assigned(CurveY) and assigned(CurveZ) then begin
         MinKeyCount:=CurveX.AnimationKeys.Count;
-        if CurveY.AnimationKeys.Count<MinKeyCount then MinKeyCount:=CurveY.AnimationKeys.Count;
-        if CurveZ.AnimationKeys.Count<MinKeyCount then MinKeyCount:=CurveZ.AnimationKeys.Count;
+        if CurveY.AnimationKeys.Count<MinKeyCount then begin
+         MinKeyCount:=CurveY.AnimationKeys.Count;
+        end;
+        if CurveZ.AnimationKeys.Count<MinKeyCount then begin
+         MinKeyCount:=CurveZ.AnimationKeys.Count;
+        end;
         if MinKeyCount>0 then begin
          Channel:=TpvScene3D.TGroup.TAnimation.TChannel.Create;
           Channel.fTarget:=TpvScene3D.TGroup.TAnimation.TChannel.TTarget.Translation;
@@ -23485,7 +23491,9 @@ var FBXScene:TpvFBXScene;
           break;
          end;
         end;
-        if BelongsToStack then break;
+        if BelongsToStack then begin
+         break;
+        end;
        end;
       end;
       if (not BelongsToStack) and (FBXScene.AnimationStackList.Count=1) then begin
@@ -23497,8 +23505,12 @@ var FBXScene:TpvFBXScene;
        CurveZ:=GetCurveFromCurveNode(CurveNode,'z');
        if assigned(CurveX) and assigned(CurveY) and assigned(CurveZ) then begin
         MinKeyCount:=CurveX.AnimationKeys.Count;
-        if CurveY.AnimationKeys.Count<MinKeyCount then MinKeyCount:=CurveY.AnimationKeys.Count;
-        if CurveZ.AnimationKeys.Count<MinKeyCount then MinKeyCount:=CurveZ.AnimationKeys.Count;
+        if CurveY.AnimationKeys.Count<MinKeyCount then begin
+         MinKeyCount:=CurveY.AnimationKeys.Count;
+        end;
+        if CurveZ.AnimationKeys.Count<MinKeyCount then begin
+         MinKeyCount:=CurveZ.AnimationKeys.Count;
+        end;
         if MinKeyCount>0 then begin
          Channel:=TpvScene3D.TGroup.TAnimation.TChannel.Create;
           Channel.fTarget:=TpvScene3D.TGroup.TAnimation.TChannel.TTarget.Rotation;
@@ -23535,7 +23547,9 @@ var FBXScene:TpvFBXScene;
           break;
          end;
         end;
-        if BelongsToStack then break;
+        if BelongsToStack then begin
+         break;
+        end;
        end;
       end;
       if (not BelongsToStack) and (FBXScene.AnimationStackList.Count=1) then begin
@@ -23547,8 +23561,12 @@ var FBXScene:TpvFBXScene;
        CurveZ:=GetCurveFromCurveNode(CurveNode,'z');
        if assigned(CurveX) and assigned(CurveY) and assigned(CurveZ) then begin
         MinKeyCount:=CurveX.AnimationKeys.Count;
-        if CurveY.AnimationKeys.Count<MinKeyCount then MinKeyCount:=CurveY.AnimationKeys.Count;
-        if CurveZ.AnimationKeys.Count<MinKeyCount then MinKeyCount:=CurveZ.AnimationKeys.Count;
+        if CurveY.AnimationKeys.Count<MinKeyCount then begin
+         MinKeyCount:=CurveY.AnimationKeys.Count;
+        end;
+        if CurveZ.AnimationKeys.Count<MinKeyCount then begin
+         MinKeyCount:=CurveZ.AnimationKeys.Count;
+        end;
         if MinKeyCount>0 then begin
          Channel:=TpvScene3D.TGroup.TAnimation.TChannel.Create;
           Channel.fTarget:=TpvScene3D.TGroup.TAnimation.TChannel.TTarget.Scale;
@@ -23600,49 +23618,79 @@ begin
  end;
 
  FBXNodeMap:=TFBXObjectIndexMap.Create(-1);
- FBXMaterialMap:=TFBXObjectIndexMap.Create(-1);
- FBXMeshMap:=TFBXObjectIndexMap.Create(-1);
- FBXCameraMap:=TFBXObjectIndexMap.Create(-1);
- FBXLightMap:=TFBXObjectIndexMap.Create(-1);
- FBXSkinMap:=TFBXObjectIndexMap.Create(-1);
- FBXNodeEntries.Initialize;
  try
 
+  FBXMaterialMap:=TFBXObjectIndexMap.Create(-1);
   try
 
-   ProcessMaterials;
+   FBXMeshMap:=TFBXObjectIndexMap.Create(-1);
+   try
 
-   ProcessMeshes;
+    FBXCameraMap:=TFBXObjectIndexMap.Create(-1);
+    try
 
-   ProcessCameras;
+     FBXLightMap:=TFBXObjectIndexMap.Create(-1);
+     try
 
-   ProcessLights;
+      FBXSkinMap:=TFBXObjectIndexMap.Create(-1);
+      try
 
-   ProcessNodes;
+       FBXNodeEntries.Initialize;
+       try
 
-   ProcessSkins;
+        try
 
-   LinkSkins;
+         ProcessMaterials;
 
-   ProcessScene;
+         ProcessMeshes;
 
-   ProcessAnimations;
+         ProcessCameras;
 
-   MarkLODVariants;
+         ProcessLights;
+
+         ProcessNodes;
+
+         ProcessSkins;
+
+         LinkSkins;
+
+         ProcessScene;
+
+         ProcessAnimations;
+
+         MarkLODVariants;
+
+        finally
+         CleanUp;
+        end;
+
+        Finish;
+
+       finally
+        FBXNodeEntries.Finalize;
+       end;
+
+      finally
+       FreeAndNil(FBXSkinMap);
+      end;
+
+     finally
+      FreeAndNil(FBXLightMap);
+     end;
+
+    finally
+     FreeAndNil(FBXCameraMap);
+    end;
+
+   finally
+    FreeAndNil(FBXMeshMap);
+   end;
 
   finally
-   CleanUp;
+   FreeAndNil(FBXMaterialMap);
   end;
 
-  Finish;
-
  finally
-  FBXNodeEntries.Finalize;
-  FreeAndNil(FBXSkinMap);
-  FreeAndNil(FBXLightMap);
-  FreeAndNil(FBXCameraMap);
-  FreeAndNil(FBXMeshMap);
-  FreeAndNil(FBXMaterialMap);
   FreeAndNil(FBXNodeMap);
  end;
 
@@ -23654,18 +23702,18 @@ begin
 
 end;
 
-
 procedure TpvScene3D.TGroup.AssignFromDAE(const aSourceDAE:TpvDAELoader);
 type TDAENodeEntry=record
       DAENode:TpvDAENode;
       NodeIndex:TpvSizeInt;
      end;
      TDAENodeEntries=array of TDAENodeEntry;
-var DAEMaterialMap:TpvHashMap<TpvPtrUInt,TpvSizeInt>;
-    DAENodeMap:TpvHashMap<TpvPtrUInt,TpvSizeInt>;
-    DAEGeometryMeshMap:TpvHashMap<TpvPtrUInt,TpvSizeInt>;
-    DAECameraMap:TpvHashMap<TpvPtrUInt,TpvSizeInt>;
-    DAELightMap:TpvHashMap<TpvPtrUInt,TpvSizeInt>;
+     TDAEObjectIndexMap=TpvHashMap<TpvPtrUInt,TpvSizeInt>;
+var DAEMaterialMap:TDAEObjectIndexMap;
+    DAENodeMap:TDAEObjectIndexMap;
+    DAEGeometryMeshMap:TDAEObjectIndexMap;
+    DAECameraMap:TDAEObjectIndexMap;
+    DAELightMap:TDAEObjectIndexMap;
     DAENodeEntries:TDAENodeEntries;
     DAENodeEntryCount:TpvSizeInt;
     UnitScaleFactor:TpvFloat;
@@ -24138,7 +24186,7 @@ var DAEMaterialMap:TpvHashMap<TpvPtrUInt,TpvSizeInt>;
       SetLength(Channel.fInputTimeArray,DAEChannel.CountLinearKeyFrames);
       SetLength(Channel.fOutputVector3Array,DAEChannel.CountLinearKeyFrames);
       for KeyFrameIndex:=0 to DAEChannel.CountLinearKeyFrames-1 do begin
-       KeyTime:=DAEChannel.StartTime+KeyFrameIndex*DAEChannel.TimeStep;
+       KeyTime:=DAEChannel.StartTime+(KeyFrameIndex*DAEChannel.TimeStep);
        Channel.fInputTimeArray[KeyFrameIndex]:=KeyTime;
        Channel.fOutputVector3Array[KeyFrameIndex]:=ConvertPosition(TpvVector3.InlineableCreate(DAEChannel.GetInterpolatedValue(KeyTime,0),DAEChannel.GetInterpolatedValue(KeyTime,1),DAEChannel.GetInterpolatedValue(KeyTime,2)));
       end;
@@ -24153,7 +24201,7 @@ var DAEMaterialMap:TpvHashMap<TpvPtrUInt,TpvSizeInt>;
      SetLength(Channel.fInputTimeArray,DAEChannel.CountLinearKeyFrames);
      SetLength(Channel.fOutputVector4Array,DAEChannel.CountLinearKeyFrames);
      for KeyFrameIndex:=0 to DAEChannel.CountLinearKeyFrames-1 do begin
-      KeyTime:=DAEChannel.StartTime+KeyFrameIndex*DAEChannel.TimeStep;
+      KeyTime:=DAEChannel.StartTime+(KeyFrameIndex*DAEChannel.TimeStep);
       Channel.fInputTimeArray[KeyFrameIndex]:=KeyTime;
       if DAEChannel.CountValues>=4 then begin // Full axis + angle
        Channel.fOutputVector4Array[KeyFrameIndex]:=TpvQuaternion.CreateFromAngleAxis(DAEChannel.GetInterpolatedValue(KeyTime,3)*(PI/180.0),ConvertDirection(TpvVector3.InlineableCreate(DAEChannel.GetInterpolatedValue(KeyTime,0),DAEChannel.GetInterpolatedValue(KeyTime,1),DAEChannel.GetInterpolatedValue(KeyTime,2)))).Vector;
@@ -24172,7 +24220,7 @@ var DAEMaterialMap:TpvHashMap<TpvPtrUInt,TpvSizeInt>;
       SetLength(Channel.fInputTimeArray,DAEChannel.CountLinearKeyFrames);
       SetLength(Channel.fOutputVector3Array,DAEChannel.CountLinearKeyFrames);
       for KeyFrameIndex:=0 to DAEChannel.CountLinearKeyFrames-1 do begin
-       KeyTime:=DAEChannel.StartTime+KeyFrameIndex*DAEChannel.TimeStep;
+       KeyTime:=DAEChannel.StartTime+(KeyFrameIndex*DAEChannel.TimeStep);
        Channel.fInputTimeArray[KeyFrameIndex]:=KeyTime;
        Channel.fOutputVector3Array[KeyFrameIndex]:=TpvVector3.InlineableCreate(DAEChannel.GetInterpolatedValue(KeyTime,0),DAEChannel.GetInterpolatedValue(KeyTime,1),DAEChannel.GetInterpolatedValue(KeyTime,2));
       end;
@@ -24188,7 +24236,7 @@ var DAEMaterialMap:TpvHashMap<TpvPtrUInt,TpvSizeInt>;
       SetLength(Channel.fInputTimeArray,DAEChannel.CountLinearKeyFrames);
       SetLength(Channel.fOutputVector3Array,DAEChannel.CountLinearKeyFrames);
       for KeyFrameIndex:=0 to DAEChannel.CountLinearKeyFrames-1 do begin
-       KeyTime:=DAEChannel.StartTime+KeyFrameIndex*DAEChannel.TimeStep;
+       KeyTime:=DAEChannel.StartTime+(KeyFrameIndex*DAEChannel.TimeStep);
        Channel.fInputTimeArray[KeyFrameIndex]:=KeyTime;
        SampledMatrix:=ConvertMatrix(DAEChannel.GetInterpolatedValuesMatrix(KeyTime));
        Decomposed:=SampledMatrix.Decompose;
@@ -24202,7 +24250,7 @@ var DAEMaterialMap:TpvHashMap<TpvPtrUInt,TpvSizeInt>;
       SetLength(Channel.fInputTimeArray,DAEChannel.CountLinearKeyFrames);
       SetLength(Channel.fOutputVector4Array,DAEChannel.CountLinearKeyFrames);
       for KeyFrameIndex:=0 to DAEChannel.CountLinearKeyFrames-1 do begin
-       KeyTime:=DAEChannel.StartTime+KeyFrameIndex*DAEChannel.TimeStep;
+       KeyTime:=DAEChannel.StartTime+(KeyFrameIndex*DAEChannel.TimeStep);
        Channel.fInputTimeArray[KeyFrameIndex]:=KeyTime;
        SampledMatrix:=ConvertMatrix(DAEChannel.GetInterpolatedValuesMatrix(KeyTime));
        Decomposed:=SampledMatrix.Decompose;
@@ -24216,7 +24264,7 @@ var DAEMaterialMap:TpvHashMap<TpvPtrUInt,TpvSizeInt>;
       SetLength(Channel.fInputTimeArray,DAEChannel.CountLinearKeyFrames);
       SetLength(Channel.fOutputVector3Array,DAEChannel.CountLinearKeyFrames);
       for KeyFrameIndex:=0 to DAEChannel.CountLinearKeyFrames-1 do begin
-       KeyTime:=DAEChannel.StartTime+KeyFrameIndex*DAEChannel.TimeStep;
+       KeyTime:=DAEChannel.StartTime+(KeyFrameIndex*DAEChannel.TimeStep);
        Channel.fInputTimeArray[KeyFrameIndex]:=KeyTime;
        SampledMatrix:=ConvertMatrix(DAEChannel.GetInterpolatedValuesMatrix(KeyTime));
        Decomposed:=SampledMatrix.Decompose;
@@ -24234,7 +24282,7 @@ var DAEMaterialMap:TpvHashMap<TpvPtrUInt,TpvSizeInt>;
       SetLength(Channel.fInputTimeArray,DAEChannel.CountLinearKeyFrames);
       SetLength(Channel.fOutputScalarArray,DAEChannel.CountLinearKeyFrames);
       for KeyFrameIndex:=0 to DAEChannel.CountLinearKeyFrames-1 do begin
-       KeyTime:=DAEChannel.StartTime+KeyFrameIndex*DAEChannel.TimeStep;
+       KeyTime:=DAEChannel.StartTime+(KeyFrameIndex*DAEChannel.TimeStep);
        Channel.fInputTimeArray[KeyFrameIndex]:=KeyTime;
        Channel.fOutputScalarArray[KeyFrameIndex]:=DAEChannel.GetInterpolatedValue(KeyTime,0);
       end;
@@ -24248,53 +24296,73 @@ var DAEMaterialMap:TpvHashMap<TpvPtrUInt,TpvSizeInt>;
 
 begin
 
- DAEMaterialMap:=TpvHashMap<TpvPtrUInt,TpvSizeInt>.Create(-1);
- DAENodeMap:=TpvHashMap<TpvPtrUInt,TpvSizeInt>.Create(-1);
- DAEGeometryMeshMap:=TpvHashMap<TpvPtrUInt,TpvSizeInt>.Create(-1);
- DAECameraMap:=TpvHashMap<TpvPtrUInt,TpvSizeInt>.Create(-1);
- DAELightMap:=TpvHashMap<TpvPtrUInt,TpvSizeInt>.Create(-1);
- DAENodeEntries:=nil;
- DAENodeEntryCount:=0;
+ DAEMaterialMap:=TDAEObjectIndexMap.Create(-1);
  try
 
-  UnitScaleFactor:=aSourceDAE.UnitMeter;
-  CoordFlipYZ:=aSourceDAE.UpAxis=dluaZUP;
+  DAENodeMap:=TDAEObjectIndexMap.Create(-1);
+  try
 
-  if assigned(aSourceDAE.MainVisualScene) then begin
-   VisualScene:=aSourceDAE.MainVisualScene;
-  end else if aSourceDAE.VisualScenes.Count>0 then begin
-   VisualScene:=aSourceDAE.VisualScenes[0];
-  end else begin
-   VisualScene:=nil;
+   DAEGeometryMeshMap:=TDAEObjectIndexMap.Create(-1);
+   try
+
+    DAECameraMap:=TDAEObjectIndexMap.Create(-1);
+    try
+
+     DAELightMap:=TDAEObjectIndexMap.Create(-1);
+     try
+
+      DAENodeEntries:=nil;
+      DAENodeEntryCount:=0;
+
+      UnitScaleFactor:=aSourceDAE.UnitMeter;
+      CoordFlipYZ:=aSourceDAE.UpAxis=dluaZUP;
+
+      if assigned(aSourceDAE.MainVisualScene) then begin
+       VisualScene:=aSourceDAE.MainVisualScene;
+      end else if aSourceDAE.VisualScenes.Count>0 then begin
+       VisualScene:=aSourceDAE.VisualScenes[0];
+      end else begin
+       VisualScene:=nil;
+      end;
+
+      ProcessMaterials;
+
+      ProcessCameras;
+
+      ProcessNodes;
+
+      ProcessSkins;
+
+      ProcessScene;
+
+      ProcessAnimations;
+
+      MarkLODVariants;
+
+      Finish;
+
+     finally
+      DAENodeEntries:=nil;
+      FreeAndNil(DAELightMap);
+     end;
+
+    finally
+     FreeAndNil(DAECameraMap);
+    end;
+
+   finally
+    FreeAndNil(DAEGeometryMeshMap);
+   end;
+
+  finally
+   FreeAndNil(DAENodeMap);
   end;
 
-  ProcessMaterials;
-
-  ProcessCameras;
-
-  ProcessNodes;
-
-  ProcessSkins;
-
-  ProcessScene;
-
-  ProcessAnimations;
-
-  MarkLODVariants;
-
-  Finish;
-
  finally
-  DAENodeEntries:=nil;
-  FreeAndNil(DAELightMap);
-  FreeAndNil(DAECameraMap);
-  FreeAndNil(DAEGeometryMeshMap);
-  FreeAndNil(DAENodeMap);
   FreeAndNil(DAEMaterialMap);
  end;
 
 end;
-
 
 function TpvScene3D.TGroup.BeginLoad(const aStream:TStream):boolean;
 var GLTF:TPasGLTF.TDocument;
