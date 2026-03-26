@@ -3870,6 +3870,7 @@ type EpvScene3D=class(Exception);
               procedure InterpolateAnimationStates(const aAlpha:TpvDouble);
              public
               procedure CleanUp;
+              procedure MarkLODVariants;
               procedure Finish;
              public
               function GetLightID(const aName:TpvUTF8String;const aIgnoreCase:Boolean=false):TpvSizeInt;
@@ -3913,6 +3914,8 @@ type EpvScene3D=class(Exception);
               procedure AssignFromSAM(const aSourceModel:TpvSAM.TModel);
              public
               procedure AssignFromOBJ(const aSourceModel:TpvOBJModel);
+             public
+              procedure AssignFromFBX(const aSourceFBX:TpvFBXLoader);
              public
               function CreateInstance(const aHeadless:Boolean=false;const aVirtual:Boolean=false):TpvScene3D.TGroup.TInstance;
               function CreateVirtualInstance(const aHeadless:Boolean=false):TpvScene3D.TGroup.TVirtualInstance;
@@ -20377,6 +20380,54 @@ begin
  end;
 end;
 
+procedure TpvScene3D.TGroup.MarkLODVariants;
+var Index,ChildrenIndex,NodeIndex:TpvSizeInt;
+    Node:TpvScene3D.TGroup.TNode;
+    Scene:TpvScene3D.TGroup.TScene;
+begin
+ fHasLODs:=false;
+ for Index:=0 to fNodes.Count-1 do begin
+  if fNodes[Index].fLODNodeIndices.Count>0 then begin
+   fHasLODs:=true;
+   break;
+  end;
+ end;
+ if not fHasLODs then begin
+  for Index:=0 to fMaterials.Count-1 do begin
+   if TpvScene3D.TMaterial(fMaterials[Index]).fLODMaterialIndices.Count>0 then begin
+    fHasLODs:=true;
+    break;
+   end;
+  end;
+ end;
+ for Index:=0 to fNodes.Count-1 do begin
+  Node:=fNodes[Index];
+  for ChildrenIndex:=0 to Node.fLODNodeIndices.Count-1 do begin
+   NodeIndex:=Node.fLODNodeIndices.Items[ChildrenIndex];
+   if (NodeIndex>=0) and (NodeIndex<fNodes.Count) then begin
+    fNodes[NodeIndex].fIsLODVariant:=true;
+    fNodes[NodeIndex].fLODPrimaryNodeIndex:=Index;
+   end;
+  end;
+ end;
+ for Index:=0 to fNodes.Count-1 do begin
+  Node:=fNodes[Index];
+  for ChildrenIndex:=Node.fChildren.Count-1 downto 0 do begin
+   if Node.fChildren[ChildrenIndex].fIsLODVariant then begin
+    Node.fChildren.Delete(ChildrenIndex);
+   end;
+  end;
+ end;
+ for Index:=0 to fScenes.Count-1 do begin
+  Scene:=fScenes[Index];
+  for ChildrenIndex:=Scene.fNodes.Count-1 downto 0 do begin
+   if Scene.fNodes[ChildrenIndex].fIsLODVariant then begin
+    Scene.fNodes.Delete(ChildrenIndex);
+   end;
+  end;
+ end;
+end;
+
 procedure TpvScene3D.TGroup.CleanUp;
 var Texture:TpvScene3D.TTexture;
     Sampler:TpvScene3D.TSampler;
@@ -22256,53 +22307,6 @@ var POCACodeString:TpvUTF8String;
    end;
   end;
  end;
- procedure MarkLODVariants;
- var Index,ChildrenIndex,NodeIndex:TpvSizeInt;
-     Node:TpvScene3D.TGroup.TNode;
-     Scene:TpvScene3D.TGroup.TScene;
- begin
-  fHasLODs:=false;
-  for Index:=0 to fNodes.Count-1 do begin
-   if fNodes[Index].fLODNodeIndices.Count>0 then begin
-    fHasLODs:=true;
-    break;
-   end;
-  end;
-  if not fHasLODs then begin
-   for Index:=0 to fMaterials.Count-1 do begin
-    if TpvScene3D.TMaterial(fMaterials[Index]).fLODMaterialIndices.Count>0 then begin
-     fHasLODs:=true;
-     break;
-    end;
-   end;
-  end;
-  for Index:=0 to fNodes.Count-1 do begin
-   Node:=fNodes[Index];
-   for ChildrenIndex:=0 to Node.fLODNodeIndices.Count-1 do begin
-    NodeIndex:=Node.fLODNodeIndices.Items[ChildrenIndex];
-    if (NodeIndex>=0) and (NodeIndex<fNodes.Count) then begin
-     fNodes[NodeIndex].fIsLODVariant:=true;
-     fNodes[NodeIndex].fLODPrimaryNodeIndex:=Index;
-    end;
-   end;
-  end;
-  for Index:=0 to fNodes.Count-1 do begin
-   Node:=fNodes[Index];
-   for ChildrenIndex:=Node.fChildren.Count-1 downto 0 do begin
-    if Node.fChildren[ChildrenIndex].fIsLODVariant then begin
-     Node.fChildren.Delete(ChildrenIndex);
-    end;
-   end;
-  end;
-  for Index:=0 to fScenes.Count-1 do begin
-   Scene:=fScenes[Index];
-   for ChildrenIndex:=Scene.fNodes.Count-1 downto 0 do begin
-    if Scene.fNodes[ChildrenIndex].fIsLODVariant then begin
-     Scene.fNodes.Delete(ChildrenIndex);
-    end;
-   end;
-  end;
- end;
 var StartTime,EndTime,
     ImagesStartTime,ImagesEndTime,
     AnimationsStartTime,AnimationsEndTime,
@@ -22898,6 +22902,8 @@ begin
 
   end;
 
+  MarkLODVariants;
+
   Finish;
 
  finally
@@ -22905,6 +22911,747 @@ begin
  end;
 
 end;
+
+procedure TpvScene3D.TGroup.AssignFromFBX(const aSourceFBX:TpvFBXLoader);
+type TFBXObjectIndexMap=TpvHashMap<TpvPtrUInt,TpvSizeInt>;
+     TFBXNodeEntry=record
+      FBXNode:TpvFBXNode;
+      NodeIndex:TpvSizeInt;
+     end;
+     TFBXNodeEntryArray=TpvDynamicArray<TFBXNodeEntry>;
+var FBXScene:TpvFBXScene;
+    FBXNodeMap:TFBXObjectIndexMap;
+    FBXMaterialMap:TFBXObjectIndexMap;
+    FBXMeshMap:TFBXObjectIndexMap;
+    FBXCameraMap:TFBXObjectIndexMap;
+    FBXLightMap:TFBXObjectIndexMap;
+    FBXSkinMap:TFBXObjectIndexMap;
+    FBXNodeEntries:TFBXNodeEntryArray;
+    UnitScaleFactor:TpvDouble;
+    CoordFlipYZ:Boolean;
+    StartTime,EndTime:TpvHighResolutionTime;
+    TimeDuration:TpvDouble;
+    TimeDurationString:TpvUTF8String;
+
+ function ConvertPosition(const aX,aY,aZ:TpvDouble):TpvVector3;
+ begin
+  if CoordFlipYZ then begin
+   result.x:=aX*UnitScaleFactor;
+   result.y:=aZ*UnitScaleFactor;
+   result.z:=-aY*UnitScaleFactor;
+  end else begin
+   result.x:=aX*UnitScaleFactor;
+   result.y:=aY*UnitScaleFactor;
+   result.z:=aZ*UnitScaleFactor;
+  end;
+ end;
+
+ function ConvertDirection(const aX,aY,aZ:TpvDouble):TpvVector3;
+ begin
+  if CoordFlipYZ then begin
+   result.x:=aX;
+   result.y:=aZ;
+   result.z:=-aY;
+  end else begin
+   result.x:=aX;
+   result.y:=aY;
+   result.z:=aZ;
+  end;
+ end;
+
+ function EulerToQuaternion(const aX,aY,aZ:TpvDouble):TpvQuaternion;
+ var rx,ry,rz,cx,sx,cy,sy,cz,sz:TpvDouble;
+ begin
+  rx:=aX*(PI/180.0);
+  ry:=aY*(PI/180.0);
+  rz:=aZ*(PI/180.0);
+  if CoordFlipYZ then begin
+   // Swap Y/Z and negate for coordinate system conversion
+   ry:=aZ*(PI/180.0);
+   rz:=-(aY*(PI/180.0));
+  end;
+  cx:=cos(rx*0.5); sx:=sin(rx*0.5);
+  cy:=cos(ry*0.5); sy:=sin(ry*0.5);
+  cz:=cos(rz*0.5); sz:=sin(rz*0.5);
+  // ZYX rotation order (FBX default)
+  result.w:=cx*cy*cz+sx*sy*sz;
+  result.x:=sx*cy*cz-cx*sy*sz;
+  result.y:=cx*sy*cz+sx*cy*sz;
+  result.z:=cx*cy*sz-sx*sy*cz;
+ end;
+
+ function GetCurveFromCurveNode(const aCurveNode:TpvFBXAnimationCurveNode;const aChannel:TpvFBXString):TpvFBXAnimationCurve;
+ var Prop:TpvFBXProperty;
+ begin
+  result:=nil;
+  // Properties are stored under remapped names: 'x', 'y', 'z' (lowercase)
+  if aCurveNode.PropertyByName.TryGetValue(aChannel,Prop) then begin
+   if assigned(Prop) and assigned(Prop.ConnectedFrom) and (Prop.ConnectedFrom is TpvFBXAnimationCurve) then begin
+    result:=TpvFBXAnimationCurve(Prop.ConnectedFrom);
+   end;
+  end;
+ end;
+
+ procedure ProcessMaterials;
+ var MaterialIndex:TpvSizeInt;
+     FBXMaterial:TpvFBXMaterial;
+     Material:TpvScene3D.TMaterial;
+     Opacity,Shininess:TpvDouble;
+ begin
+  fSceneInstance.fMaterialListLock.Acquire;
+  try
+   for MaterialIndex:=0 to FBXScene.Materials.Count-1 do begin
+    FBXMaterial:=FBXScene.Materials[MaterialIndex];
+    Material:=TpvScene3D.TMaterial.Create(ResourceManager,fSceneInstance,nil);
+    try
+     Material.AssignFromEmpty;
+     Material.fName:=TpvUTF8String(FBXMaterial.Name);
+     Material.fData.ShadingModel:=TpvScene3D.TMaterial.TShadingModel.PBRMetallicRoughness;
+     Material.fData.PBRMetallicRoughness.BaseColorFactor:=TpvVector4.InlineableCreate(FBXMaterial.DiffuseColor.Red,FBXMaterial.DiffuseColor.Green,FBXMaterial.DiffuseColor.Blue,1.0);
+     Opacity:=FBXMaterial.Opacity;
+     if Opacity<=0.0 then begin
+      Opacity:=1.0-FBXMaterial.TransparencyFactor;
+     end;
+     if Opacity<1.0 then begin
+      Material.fData.PBRMetallicRoughness.BaseColorFactor.w:=Opacity;
+      Material.fData.AlphaMode:=TpvScene3D.TMaterial.TAlphaMode.Blend;
+     end else begin
+      Material.fData.AlphaMode:=TpvScene3D.TMaterial.TAlphaMode.Opaque;
+     end;
+     Shininess:=FBXMaterial.Shininess;
+     if Shininess<=0.0 then begin
+      Shininess:=FBXMaterial.ShininessExponent;
+     end;
+     if Shininess>0.0 then begin
+      Material.fData.PBRMetallicRoughness.RoughnessFactor:=1.0-Min(Shininess/100.0,1.0);
+     end else begin
+      Material.fData.PBRMetallicRoughness.RoughnessFactor:=0.5;
+     end;
+     Material.fData.PBRMetallicRoughness.MetallicFactor:=0.0;
+     if (FBXMaterial.Emissive.Red>0.0) or (FBXMaterial.Emissive.Green>0.0) or (FBXMaterial.Emissive.Blue>0.0) then begin
+      Material.fData.EmissiveFactor:=TpvVector4.InlineableCreate(FBXMaterial.Emissive.Red,FBXMaterial.Emissive.Green,FBXMaterial.Emissive.Blue,1.0);
+     end;
+     Material.fData.DoubleSided:=true;
+     Material.FillShaderData;
+    finally
+     FBXMaterialMap.Add(TpvPtrUInt(pointer(FBXMaterial)),AddMaterial(Material,false,false));
+    end;
+   end;
+   FinalizeMaterials(false);
+  finally
+   fSceneInstance.fMaterialListLock.Release;
+  end;
+ end;
+
+ procedure ProcessMeshes;
+ type TMaterialGroup=record
+       Indices:TpvDynamicArray<TpvSizeInt>;
+      end;
+      PMaterialGroup=^TMaterialGroup;
+      TMaterialGroupArray=array of TMaterialGroup;
+ var MeshIndex,TriIndex,VertIndex,MaterialIdx,GroupIdx,
+     DestVertexIndex,GroupCount:TpvSizeInt;
+     FBXMesh:TpvFBXMesh;
+     FBXTriVert:TpvFBXMeshTriangleVertex;
+     Mesh:TpvScene3D.TGroup.TMesh;
+     MeshPrimitive:TpvScene3D.TGroup.TMesh.TPrimitive;
+     MeshVertex:TpvScene3D.PVertex;
+     DestinationMaterial:TpvScene3D.TMaterial;
+     MaterialGroups:TMaterialGroupArray;
+     MaterialIDValue:TpvSizeInt;
+     Position,Normal,Tangent,Bitangent:TpvVector3;
+ begin
+  for MeshIndex:=0 to FBXScene.Meshes.Count-1 do begin
+   FBXMesh:=FBXScene.Meshes[MeshIndex];
+   if FBXMesh.TriangleVertices.Count=0 then begin
+    continue;
+   end;
+   Mesh:=CreateMesh(TpvUTF8String(FBXMesh.Name));
+   try
+    GroupCount:=0;
+    for TriIndex:=0 to FBXMesh.TriangleVertices.Count-1 do begin
+     MaterialIdx:=FBXMesh.TriangleVertices[TriIndex].Material;
+     if MaterialIdx<0 then begin
+      MaterialIdx:=0;
+     end;
+     if MaterialIdx>=GroupCount then begin
+      GroupCount:=MaterialIdx+1;
+     end;
+    end;
+    if GroupCount=0 then begin
+     GroupCount:=1;
+    end;
+    MaterialGroups:=nil;
+    SetLength(MaterialGroups,GroupCount);
+    try
+     for GroupIdx:=0 to GroupCount-1 do begin
+      MaterialGroups[GroupIdx].Indices.Initialize;
+     end;
+     for TriIndex:=0 to FBXMesh.TriangleVertices.Count-1 do begin
+      MaterialIdx:=FBXMesh.TriangleVertices[TriIndex].Material;
+      if (MaterialIdx<0) or (MaterialIdx>=GroupCount) then begin
+       MaterialIdx:=0;
+      end;
+      MaterialGroups[MaterialIdx].Indices.Add(TriIndex);
+     end;
+     for GroupIdx:=0 to GroupCount-1 do begin
+      if MaterialGroups[GroupIdx].Indices.Count=0 then begin
+       continue;
+      end;
+      MeshPrimitive:=Mesh.CreatePrimitive;
+      try
+       MeshPrimitive.PrimitiveTopology:=TpvScene3D.TPrimitiveTopology.Triangles;
+       if (GroupIdx<FBXMesh.Materials.Count) then begin
+        if FBXMaterialMap.TryGet(TpvPtrUInt(pointer(FBXMesh.Materials[GroupIdx])),MaterialIDValue) then begin
+         MeshPrimitive.MaterialID:=MaterialIDValue;
+         if (MaterialIDValue>=0) and (MaterialIDValue<fMaterials.Count) then begin
+          MeshPrimitive.Material:=fMaterials[MaterialIDValue];
+         end else begin
+          MeshPrimitive.Material:=fSceneInstance.EmptyMaterial;
+         end;
+        end else begin
+         MeshPrimitive.MaterialID:=AddMaterial(fSceneInstance.EmptyMaterial);
+         MeshPrimitive.Material:=fSceneInstance.EmptyMaterial;
+        end;
+       end else begin
+        MeshPrimitive.MaterialID:=AddMaterial(fSceneInstance.EmptyMaterial);
+        MeshPrimitive.Material:=fSceneInstance.EmptyMaterial;
+       end;
+       for VertIndex:=0 to MaterialGroups[GroupIdx].Indices.Count-1 do begin
+        TriIndex:=MaterialGroups[GroupIdx].Indices[VertIndex];
+        FBXTriVert:=FBXMesh.TriangleVertices[TriIndex];
+        Position:=ConvertPosition(FBXTriVert.Position.x,FBXTriVert.Position.y,FBXTriVert.Position.z);
+        Normal:=ConvertDirection(FBXTriVert.Normal.x,FBXTriVert.Normal.y,FBXTriVert.Normal.z);
+        Tangent:=ConvertDirection(FBXTriVert.Tangent.x,FBXTriVert.Tangent.y,FBXTriVert.Tangent.z);
+        Bitangent:=ConvertDirection(FBXTriVert.Bitangent.x,FBXTriVert.Bitangent.y,FBXTriVert.Bitangent.z);
+        DestVertexIndex:=-1;
+        MeshVertex:=MeshPrimitive.AddIndirectVertex(@DestVertexIndex);
+        MeshVertex^.NodeIndex:=0;
+        MeshVertex^.MaterialID:=0;
+        MeshVertex^.Flags:=0;
+        MeshVertex^.Position:=Position;
+        MeshVertex^.SetTangentSpaceVectors(Tangent,Bitangent,Normal);
+        MeshVertex^.TexCoord0:=TpvVector2.InlineableCreate(FBXTriVert.UV.x,FBXTriVert.UV.y);
+        MeshVertex^.TexCoord1:=TpvVector2.Origin;
+        MeshVertex^.Color0.r:=FBXTriVert.Color.Red;
+        MeshVertex^.Color0.g:=FBXTriVert.Color.Green;
+        MeshVertex^.Color0.b:=FBXTriVert.Color.Blue;
+        MeshVertex^.Color0.a:=FBXTriVert.Color.Alpha;
+        MeshVertex^.MorphTargetVertexBaseIndex:=TpvUInt32($ffffffff);
+        MeshVertex^.JointBlockBaseIndex:=0;
+        MeshVertex^.CountJointBlocks:=0;
+        MeshPrimitive.AddIndex(DestVertexIndex);
+       end;
+      finally
+       MeshPrimitive.Finish;
+      end;
+     end;
+    finally
+     for GroupIdx:=0 to GroupCount-1 do begin
+      MaterialGroups[GroupIdx].Indices.Finalize;
+     end;
+     MaterialGroups:=nil;
+    end;
+   finally
+    Mesh.Finish;
+    FBXMeshMap.Add(TpvPtrUInt(pointer(FBXMesh)),fMeshes.IndexOf(Mesh));
+   end;
+  end;
+ end;
+
+ procedure ProcessCameras;
+ var CameraIndex:TpvSizeInt;
+     FBXCamera:TpvFBXCamera;
+     Camera:TpvScene3D.TGroup.TCamera;
+ begin
+  for CameraIndex:=0 to FBXScene.Cameras.Count-1 do begin
+   FBXCamera:=FBXScene.Cameras[CameraIndex];
+   Camera:=CreateCamera(TpvUTF8String(FBXCamera.Name));
+   try
+    Camera.fPointerToCameraData^.Type_:=TpvScene3D.TCameraData.TCameraType.Perspective;
+    Camera.fPointerToCameraData^.Perspective.YFoV:=FBXCamera.FieldOfView*(PI/180.0);
+    Camera.fPointerToCameraData^.Perspective.ZNear:=FBXCamera.NearPlane*UnitScaleFactor;
+    Camera.fPointerToCameraData^.Perspective.ZFar:=FBXCamera.FarPlane*UnitScaleFactor;
+    Camera.fPointerToCameraData^.Perspective.AspectRatio:=0.0;
+   finally
+    FBXCameraMap.Add(TpvPtrUInt(pointer(FBXCamera)),fCameras.IndexOf(Camera));
+   end;
+  end;
+ end;
+
+ procedure ProcessLights;
+ var LightIndex:TpvSizeInt;
+     FBXLight:TpvFBXLight;
+     Light:TpvScene3D.TGroup.TLight;
+ begin
+  for LightIndex:=0 to FBXScene.Lights.Count-1 do begin
+   FBXLight:=FBXScene.Lights[LightIndex];
+   Light:=CreateLight(TpvUTF8String(FBXLight.Name));
+   try
+    case FBXLight.LightType of
+     TpvFBXLight.POINT:begin
+      Light.fData.fType_:=TpvScene3D.TLightData.TLightType.Point;
+     end;
+     TpvFBXLight.SPOT:begin
+      Light.fData.fType_:=TpvScene3D.TLightData.TLightType.Spot;
+      Light.fData.fOuterConeAngle:=FBXLight.ConeAngle*(PI/180.0);
+      Light.fData.fInnerConeAngle:=Light.fData.fOuterConeAngle*0.8;
+     end;
+     TpvFBXLight.DIRECTIONAL:begin
+      Light.fData.fType_:=TpvScene3D.TLightData.TLightType.Directional;
+     end;
+     else begin
+      Light.fData.fType_:=TpvScene3D.TLightData.TLightType.Point;
+     end;
+    end;
+    Light.fData.fColor:=TpvVector3.InlineableCreate(FBXLight.Color.Red,FBXLight.Color.Green,FBXLight.Color.Blue);
+    Light.fData.fIntensity:=FBXLight.Intensity;
+    Light.fData.fRange:=0.0;
+    Light.fData.fCastShadows:=true;
+    Light.fData.fVisible:=true;
+   finally
+    FBXLightMap.Add(TpvPtrUInt(pointer(FBXLight)),fLights.IndexOf(Light));
+   end;
+  end;
+ end;
+
+ procedure ProcessNodes;
+  procedure ProcessFBXNode(const aFBXNode:TpvFBXNode;const aParentNode:TpvScene3D.TGroup.TNode);
+  var ChildIndex,ConnIdx,MeshIdx,CameraIdx,LightIdx:TpvSizeInt;
+      Node:TpvScene3D.TGroup.TNode;
+      ChildFBXNode:TpvFBXNode;
+      ConnObj:TpvFBXObject;
+      NodeEntry:TFBXNodeEntry;
+  begin
+   Node:=CreateNode(TpvUTF8String(aFBXNode.Name));
+   FBXNodeMap.Add(TpvPtrUInt(pointer(aFBXNode)),fNodes.IndexOf(Node));
+   NodeEntry.FBXNode:=aFBXNode;
+   NodeEntry.NodeIndex:=fNodes.IndexOf(Node);
+   FBXNodeEntries.Add(NodeEntry);
+   // Transform
+   Node.fTranslation:=ConvertPosition(
+    aFBXNode.LclTranslation.x,
+    aFBXNode.LclTranslation.y,
+    aFBXNode.LclTranslation.z);
+   Node.fRotation:=EulerToQuaternion(
+    aFBXNode.LclRotation.x,
+    aFBXNode.LclRotation.y,
+    aFBXNode.LclRotation.z);
+   Node.fScale:=TpvVector3.InlineableCreate(aFBXNode.LclScaling.x,aFBXNode.LclScaling.y,aFBXNode.LclScaling.z);
+   Node.fMatrix:=TpvMatrix4x4.Identity;
+   Node.fVisible:=aFBXNode.Visibility;
+   // Link connected mesh, camera, light (NOT skin — done in LinkSkins)
+   // FBX OO connections: DstObject.ConnectTo(SrcObject), so ConnectedTo has children
+   for ConnIdx:=0 to aFBXNode.ConnectedTo.Count-1 do begin
+    ConnObj:=aFBXNode.ConnectedTo[ConnIdx];
+    if (ConnObj is TpvFBXMesh) and (not assigned(Node.fMesh)) then begin
+     if FBXMeshMap.TryGet(TpvPtrUInt(pointer(ConnObj)),MeshIdx) then begin
+      if (MeshIdx>=0) and (MeshIdx<fMeshes.Count) then begin
+       Node.fMesh:=fMeshes[MeshIdx];
+      end;
+     end;
+    end else if (ConnObj is TpvFBXCamera) and (not assigned(Node.fCamera)) then begin
+     if FBXCameraMap.TryGet(TpvPtrUInt(pointer(ConnObj)),CameraIdx) then begin
+      if (CameraIdx>=0) and (CameraIdx<fCameras.Count) then begin
+       Node.fCamera:=fCameras[CameraIdx];
+      end;
+     end;
+    end else if (ConnObj is TpvFBXLight) and (not assigned(Node.fLight)) then begin
+     if FBXLightMap.TryGet(TpvPtrUInt(pointer(ConnObj)),LightIdx) then begin
+      if (LightIdx>=0) and (LightIdx<fLights.Count) then begin
+       Node.fLight:=fLights[LightIdx];
+       Node.fLight.fNodes.Add(Node);
+      end;
+     end;
+    end;
+   end;
+   // Parent-child link
+   if assigned(aParentNode) then begin
+    aParentNode.fChildren.Add(Node);
+   end;
+   Node.Finish;
+   // Recurse into children
+   for ChildIndex:=0 to aFBXNode.Children.Count-1 do begin
+    ChildFBXNode:=aFBXNode.Children[ChildIndex];
+    ProcessFBXNode(ChildFBXNode,Node);
+   end;
+  end;
+ var RootIndex:TpvSizeInt;
+     RootObj:TpvFBXObject;
+ begin
+  for RootIndex:=0 to FBXScene.RootNodes.Count-1 do begin
+   RootObj:=FBXScene.RootNodes[RootIndex];
+   if RootObj is TpvFBXNode then begin
+    ProcessFBXNode(TpvFBXNode(RootObj),nil);
+   end;
+  end;
+ end;
+
+ procedure ProcessSkins;
+ var MeshIndex,DeformerIndex,ClusterIndex,i,j:TpvSizeInt;
+     FBXMesh:TpvFBXMesh;
+     ConnObj:TpvFBXObject;
+     SkinDeformer:TpvFBXSkinDeformer;
+     Cluster:TpvFBXCluster;
+     Skin:TpvScene3D.TGroup.TSkin;
+     LinkNode:TpvFBXNode;
+     NodeIdx:TpvSizeInt;
+     InvBindMatrix:TpvMatrix4x4;
+     FBXMatrix:TpvFBXMatrix4x4;
+ begin
+  for MeshIndex:=0 to FBXScene.Meshes.Count-1 do begin
+   FBXMesh:=FBXScene.Meshes[MeshIndex];
+   // FBX OO: C,"OO",DeformerID,MeshID => DstObj=Mesh, SrcObj=Deformer => Mesh.ConnectTo(Deformer)
+   // So Mesh.ConnectedTo has Deformer
+   for DeformerIndex:=0 to FBXMesh.ConnectedTo.Count-1 do begin
+    ConnObj:=FBXMesh.ConnectedTo[DeformerIndex];
+    if ConnObj is TpvFBXSkinDeformer then begin
+     SkinDeformer:=TpvFBXSkinDeformer(ConnObj);
+     Skin:=CreateSkin(TpvUTF8String(FBXMesh.Name)+'_skin');
+     Skin.fSkeleton:=-1;
+     // SkinDeformer.Clusters = ConnectedTo (parser convention)
+     for ClusterIndex:=0 to SkinDeformer.Clusters.Count-1 do begin
+      if SkinDeformer.Clusters[ClusterIndex] is TpvFBXCluster then begin
+       Cluster:=TpvFBXCluster(SkinDeformer.Clusters[ClusterIndex]);
+       LinkNode:=Cluster.GetLink;
+       if assigned(LinkNode) then begin
+        if FBXNodeMap.TryGet(TpvPtrUInt(pointer(LinkNode)),NodeIdx) then begin
+         Skin.fJoints.Add(NodeIdx);
+         // Convert TpvFBXMatrix4x4 (double) to TpvMatrix4x4 (float)
+         FBXMatrix:=Cluster.TransformLink;
+         for i:=0 to 3 do begin
+          for j:=0 to 3 do begin
+           InvBindMatrix.RawComponents[i,j]:=FBXMatrix.RawComponents[i,j];
+          end;
+         end;
+         Skin.fInverseBindMatrices.Add(InvBindMatrix.Inverse);
+        end;
+       end;
+      end;
+     end;
+     Skin.fJoints.Finish;
+     Skin.fInverseBindMatrices.Finish;
+     FBXSkinMap.Add(TpvPtrUInt(pointer(FBXMesh)),fSkins.IndexOf(Skin));
+     break; // One skin per mesh
+    end;
+   end;
+  end;
+ end;
+
+ procedure LinkSkins;
+ var EntryIndex:TpvSizeInt;
+     Entry:TFBXNodeEntry;
+     Node:TpvScene3D.TGroup.TNode;
+     ConnIdx,SkinIdx,MeshIdx:TpvSizeInt;
+     ConnObj:TpvFBXObject;
+ begin
+  // Link skins to nodes that reference meshes with skin deformers
+  for EntryIndex:=0 to FBXNodeEntries.Count-1 do begin
+   Entry:=FBXNodeEntries.Items[EntryIndex];
+   if (Entry.NodeIndex>=0) and (Entry.NodeIndex<fNodes.Count) then begin
+    Node:=fNodes[Entry.NodeIndex];
+    if assigned(Node.fMesh) then begin
+     // Find the FBX mesh connected to this node and check for skin
+     for ConnIdx:=0 to Entry.FBXNode.ConnectedTo.Count-1 do begin
+      ConnObj:=Entry.FBXNode.ConnectedTo[ConnIdx];
+      if ConnObj is TpvFBXMesh then begin
+       if FBXSkinMap.TryGet(TpvPtrUInt(pointer(ConnObj)),SkinIdx) then begin
+        if (SkinIdx>=0) and (SkinIdx<fSkins.Count) then begin
+         Node.fSkin:=fSkins[SkinIdx];
+        end;
+       end;
+       break;
+      end;
+     end;
+    end;
+   end;
+  end;
+ end;
+
+ procedure ProcessScene;
+ var Scene:TpvScene3D.TGroup.TScene;
+     RootIndex:TpvSizeInt;
+     RootObj:TpvFBXObject;
+     NodeIdx:TpvSizeInt;
+ begin
+  Scene:=CreateScene('FBXScene');
+  for RootIndex:=0 to FBXScene.RootNodes.Count-1 do begin
+   RootObj:=FBXScene.RootNodes[RootIndex];
+   if RootObj is TpvFBXNode then begin
+    if FBXNodeMap.TryGet(TpvPtrUInt(pointer(RootObj)),NodeIdx) then begin
+     if (NodeIdx>=0) and (NodeIdx<fNodes.Count) then begin
+      Scene.fNodes.Add(fNodes[NodeIdx]);
+     end;
+    end;
+   end;
+  end;
+  fScene:=Scene;
+ end;
+
+ procedure ProcessAnimations;
+ var StackIndex,EntryIndex,KeyIndex,MinKeyCount:TpvSizeInt;
+     CheckLayerIndex,CheckStackIndex:TpvSizeInt;
+     AnimStack:TpvFBXAnimationStack;
+     CurveNode:TpvFBXAnimationCurveNode;
+     Animation:TpvScene3D.TGroup.TAnimation;
+     Channel:TpvScene3D.TGroup.TAnimation.TChannel;
+     CurveX,CurveY,CurveZ:TpvFBXAnimationCurve;
+     Entry:TFBXNodeEntry;
+     NodeIdx:TpvSizeInt;
+     Prop:TpvFBXProperty;
+     KeyTime:TpvDouble;
+     BelongsToStack:Boolean;
+     LayerObj:TpvFBXObject;
+     StackObj:TpvFBXObject;
+ begin
+  for StackIndex:=0 to FBXScene.AnimationStackList.Count-1 do begin
+   AnimStack:=FBXScene.AnimationStackList[StackIndex];
+   Animation:=CreateAnimation(TpvUTF8String(AnimStack.Name));
+   // For each node, check if it has animated properties belonging to this stack
+   for EntryIndex:=0 to FBXNodeEntries.Count-1 do begin
+    Entry:=FBXNodeEntries.Items[EntryIndex];
+    NodeIdx:=Entry.NodeIndex;
+    // Check 'LclTranslation' property (remapped from 'Lcl Translation')
+    if Entry.FBXNode.PropertyByName.TryGetValue('LclTranslation',Prop) then begin
+     if assigned(Prop) and assigned(Prop.ConnectedFrom) and (Prop.ConnectedFrom is TpvFBXAnimationCurveNode) then begin
+      CurveNode:=TpvFBXAnimationCurveNode(Prop.ConnectedFrom);
+      // Verify this curve node belongs to the current animation stack
+      BelongsToStack:=false;
+      // CurveNode.ConnectedTo has the AnimLayer (from Layer.ConnectTo(CurveNode))
+      // Wait: C,"OO",CurveNodeID,LayerID => Dst=Layer, Src=CurveNode => Layer.ConnectTo(CurveNode)
+      // So Layer.ConnectedTo has CurveNode, CurveNode.ConnectedFrom has Layer
+      for CheckLayerIndex:=0 to CurveNode.ConnectedFrom.Count-1 do begin
+       LayerObj:=CurveNode.ConnectedFrom[CheckLayerIndex];
+       if LayerObj is TpvFBXAnimationLayer then begin
+        // Layer.ConnectedTo has Stack? No:
+        // C,"OO",LayerID,StackID => Dst=Stack, Src=Layer => Stack.ConnectTo(Layer)
+        // Stack.ConnectedTo has Layer, Layer.ConnectedFrom has Stack
+        for CheckStackIndex:=0 to TpvFBXAnimationLayer(LayerObj).ConnectedFrom.Count-1 do begin
+         StackObj:=TpvFBXAnimationLayer(LayerObj).ConnectedFrom[CheckStackIndex];
+         if StackObj=AnimStack then begin
+          BelongsToStack:=true;
+          break;
+         end;
+        end;
+        if BelongsToStack then break;
+       end;
+      end;
+      if (not BelongsToStack) and (FBXScene.AnimationStackList.Count=1) then begin
+       BelongsToStack:=true; // Single stack: just assign all
+      end;
+      if BelongsToStack then begin
+       CurveX:=GetCurveFromCurveNode(CurveNode,'x');
+       CurveY:=GetCurveFromCurveNode(CurveNode,'y');
+       CurveZ:=GetCurveFromCurveNode(CurveNode,'z');
+       if assigned(CurveX) and assigned(CurveY) and assigned(CurveZ) then begin
+        MinKeyCount:=CurveX.AnimationKeys.Count;
+        if CurveY.AnimationKeys.Count<MinKeyCount then MinKeyCount:=CurveY.AnimationKeys.Count;
+        if CurveZ.AnimationKeys.Count<MinKeyCount then MinKeyCount:=CurveZ.AnimationKeys.Count;
+        if MinKeyCount>0 then begin
+         Channel:=TpvScene3D.TGroup.TAnimation.TChannel.Create;
+          Channel.fTarget:=TpvScene3D.TGroup.TAnimation.TChannel.TTarget.Translation;
+          Channel.fTargetIndex:=NodeIdx;
+          Channel.fInterpolation:=TpvScene3D.TGroup.TAnimation.TChannel.TInterpolation.Linear;
+          SetLength(Channel.fInputTimeArray,MinKeyCount);
+          SetLength(Channel.fOutputVector3Array,MinKeyCount);
+          for KeyIndex:=0 to MinKeyCount-1 do begin
+           KeyTime:=aSourceFBX.TimeUtils.TimeToSeconds(CurveX.AnimationKeys[KeyIndex].Time);
+           Channel.fInputTimeArray[KeyIndex]:=KeyTime;
+           Channel.fOutputVector3Array[KeyIndex]:=ConvertPosition(
+            CurveX.AnimationKeys[KeyIndex].Value,
+            CurveY.AnimationKeys[KeyIndex].Value,
+            CurveZ.AnimationKeys[KeyIndex].Value);
+          end;
+          Animation.fChannels.Add(Channel);
+        end;
+       end;
+      end;
+     end;
+    end;
+    // Check 'LclRotation'
+    if Entry.FBXNode.PropertyByName.TryGetValue('LclRotation',Prop) then begin
+     if assigned(Prop) and assigned(Prop.ConnectedFrom) and (Prop.ConnectedFrom is TpvFBXAnimationCurveNode) then begin
+      CurveNode:=TpvFBXAnimationCurveNode(Prop.ConnectedFrom);
+      BelongsToStack:=false;
+      for CheckLayerIndex:=0 to CurveNode.ConnectedFrom.Count-1 do begin
+       LayerObj:=CurveNode.ConnectedFrom[CheckLayerIndex];
+       if LayerObj is TpvFBXAnimationLayer then begin
+        for CheckStackIndex:=0 to TpvFBXAnimationLayer(LayerObj).ConnectedFrom.Count-1 do begin
+         StackObj:=TpvFBXAnimationLayer(LayerObj).ConnectedFrom[CheckStackIndex];
+         if StackObj=AnimStack then begin
+          BelongsToStack:=true;
+          break;
+         end;
+        end;
+        if BelongsToStack then break;
+       end;
+      end;
+      if (not BelongsToStack) and (FBXScene.AnimationStackList.Count=1) then begin
+       BelongsToStack:=true;
+      end;
+      if BelongsToStack then begin
+       CurveX:=GetCurveFromCurveNode(CurveNode,'x');
+       CurveY:=GetCurveFromCurveNode(CurveNode,'y');
+       CurveZ:=GetCurveFromCurveNode(CurveNode,'z');
+       if assigned(CurveX) and assigned(CurveY) and assigned(CurveZ) then begin
+        MinKeyCount:=CurveX.AnimationKeys.Count;
+        if CurveY.AnimationKeys.Count<MinKeyCount then MinKeyCount:=CurveY.AnimationKeys.Count;
+        if CurveZ.AnimationKeys.Count<MinKeyCount then MinKeyCount:=CurveZ.AnimationKeys.Count;
+        if MinKeyCount>0 then begin
+         Channel:=TpvScene3D.TGroup.TAnimation.TChannel.Create;
+          Channel.fTarget:=TpvScene3D.TGroup.TAnimation.TChannel.TTarget.Rotation;
+          Channel.fTargetIndex:=NodeIdx;
+          Channel.fInterpolation:=TpvScene3D.TGroup.TAnimation.TChannel.TInterpolation.Linear;
+          SetLength(Channel.fInputTimeArray,MinKeyCount);
+          SetLength(Channel.fOutputVector4Array,MinKeyCount);
+          for KeyIndex:=0 to MinKeyCount-1 do begin
+           KeyTime:=aSourceFBX.TimeUtils.TimeToSeconds(CurveX.AnimationKeys[KeyIndex].Time);
+           Channel.fInputTimeArray[KeyIndex]:=KeyTime;
+           Channel.fOutputVector4Array[KeyIndex]:=TpvVector4(EulerToQuaternion(
+            CurveX.AnimationKeys[KeyIndex].Value,
+            CurveY.AnimationKeys[KeyIndex].Value,
+            CurveZ.AnimationKeys[KeyIndex].Value));
+          end;
+          Animation.fChannels.Add(Channel);
+        end;
+       end;
+      end;
+     end;
+    end;
+    // Check 'LclScaling'
+    if Entry.FBXNode.PropertyByName.TryGetValue('LclScaling',Prop) then begin
+     if assigned(Prop) and assigned(Prop.ConnectedFrom) and (Prop.ConnectedFrom is TpvFBXAnimationCurveNode) then begin
+      CurveNode:=TpvFBXAnimationCurveNode(Prop.ConnectedFrom);
+      BelongsToStack:=false;
+      for CheckLayerIndex:=0 to CurveNode.ConnectedFrom.Count-1 do begin
+       LayerObj:=CurveNode.ConnectedFrom[CheckLayerIndex];
+       if LayerObj is TpvFBXAnimationLayer then begin
+        for CheckStackIndex:=0 to TpvFBXAnimationLayer(LayerObj).ConnectedFrom.Count-1 do begin
+         StackObj:=TpvFBXAnimationLayer(LayerObj).ConnectedFrom[CheckStackIndex];
+         if StackObj=AnimStack then begin
+          BelongsToStack:=true;
+          break;
+         end;
+        end;
+        if BelongsToStack then break;
+       end;
+      end;
+      if (not BelongsToStack) and (FBXScene.AnimationStackList.Count=1) then begin
+       BelongsToStack:=true;
+      end;
+      if BelongsToStack then begin
+       CurveX:=GetCurveFromCurveNode(CurveNode,'x');
+       CurveY:=GetCurveFromCurveNode(CurveNode,'y');
+       CurveZ:=GetCurveFromCurveNode(CurveNode,'z');
+       if assigned(CurveX) and assigned(CurveY) and assigned(CurveZ) then begin
+        MinKeyCount:=CurveX.AnimationKeys.Count;
+        if CurveY.AnimationKeys.Count<MinKeyCount then MinKeyCount:=CurveY.AnimationKeys.Count;
+        if CurveZ.AnimationKeys.Count<MinKeyCount then MinKeyCount:=CurveZ.AnimationKeys.Count;
+        if MinKeyCount>0 then begin
+         Channel:=TpvScene3D.TGroup.TAnimation.TChannel.Create;
+          Channel.fTarget:=TpvScene3D.TGroup.TAnimation.TChannel.TTarget.Scale;
+          Channel.fTargetIndex:=NodeIdx;
+          Channel.fInterpolation:=TpvScene3D.TGroup.TAnimation.TChannel.TInterpolation.Linear;
+          SetLength(Channel.fInputTimeArray,MinKeyCount);
+          SetLength(Channel.fOutputVector3Array,MinKeyCount);
+          for KeyIndex:=0 to MinKeyCount-1 do begin
+           KeyTime:=aSourceFBX.TimeUtils.TimeToSeconds(CurveX.AnimationKeys[KeyIndex].Time);
+           Channel.fInputTimeArray[KeyIndex]:=KeyTime;
+           Channel.fOutputVector3Array[KeyIndex]:=TpvVector3.InlineableCreate(CurveX.AnimationKeys[KeyIndex].Value,CurveY.AnimationKeys[KeyIndex].Value,CurveZ.AnimationKeys[KeyIndex].Value);
+          end;
+          Animation.fChannels.Add(Channel);
+        end;
+       end;
+      end;
+     end;
+    end;
+   end;
+  end;
+ end;
+
+begin
+
+ StartTime:=pvApplication.HighResolutionTimer.GetTime;
+
+ FBXScene:=aSourceFBX.Scene;
+ if not assigned(FBXScene) then begin
+  exit;
+ end;
+
+ // Determine coordinate system conversion
+ UnitScaleFactor:=1.0;
+ CoordFlipYZ:=false;
+ if assigned(aSourceFBX.GlobalSettings) then begin
+  UnitScaleFactor:=aSourceFBX.GlobalSettings.UnitScaleFactor;
+  if UnitScaleFactor<=0.0 then begin
+   UnitScaleFactor:=1.0;
+  end;
+  // FBX uses centimeters by default
+  UnitScaleFactor:=UnitScaleFactor*0.01;
+  // Check if Z-up (most DCC tools export Z-up FBX)
+  if aSourceFBX.GlobalSettings.UpAxis=2 then begin
+   CoordFlipYZ:=true;
+  end;
+ end else begin
+  UnitScaleFactor:=0.01;
+  CoordFlipYZ:=true;
+ end;
+
+ FBXNodeMap:=TFBXObjectIndexMap.Create(-1);
+ FBXMaterialMap:=TFBXObjectIndexMap.Create(-1);
+ FBXMeshMap:=TFBXObjectIndexMap.Create(-1);
+ FBXCameraMap:=TFBXObjectIndexMap.Create(-1);
+ FBXLightMap:=TFBXObjectIndexMap.Create(-1);
+ FBXSkinMap:=TFBXObjectIndexMap.Create(-1);
+ FBXNodeEntries.Initialize;
+ try
+
+  try
+
+   ProcessMaterials;
+
+   ProcessMeshes;
+
+   ProcessCameras;
+
+   ProcessLights;
+
+   ProcessNodes;
+
+   ProcessSkins;
+
+   LinkSkins;
+
+   ProcessScene;
+
+   ProcessAnimations;
+
+   MarkLODVariants;
+
+  finally
+   CleanUp;
+  end;
+
+  Finish;
+
+ finally
+  FBXNodeEntries.Finalize;
+  FreeAndNil(FBXSkinMap);
+  FreeAndNil(FBXLightMap);
+  FreeAndNil(FBXCameraMap);
+  FreeAndNil(FBXMeshMap);
+  FreeAndNil(FBXMaterialMap);
+  FreeAndNil(FBXNodeMap);
+ end;
+
+ EndTime:=pvApplication.HighResolutionTimer.GetTime;
+
+ TimeDuration:=pvApplication.HighResolutionTimer.ToFloatSeconds(EndTime-StartTime);
+ Str(TimeDuration*1000.0:1:2,TimeDurationString);
+ pvApplication.Log(LOG_DEBUG,'TpvScene3D.TGroup.AssignFromFBX("'+FileName+'")','Total duration: '+TimeDurationString+' ms');
+
+end;
+
 
 function TpvScene3D.TGroup.BeginLoad(const aStream:TStream):boolean;
 var GLTF:TPasGLTF.TDocument;
@@ -22946,7 +23693,7 @@ begin
       FBX:=TpvFBXLoader.Create;
       try
        FBX.LoadFromStream(aStream);
-     //AssignFromFBX(FBX);
+       AssignFromFBX(FBX);
       finally
        FreeAndNil(FBX);
       end;
