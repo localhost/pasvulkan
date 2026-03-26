@@ -3917,6 +3917,8 @@ type EpvScene3D=class(Exception);
              public
               procedure AssignFromFBX(const aSourceFBX:TpvFBXLoader);
              public
+              procedure AssignFromDAE(const aSourceDAE:TpvDAELoader);
+             public
               function CreateInstance(const aHeadless:Boolean=false;const aVirtual:Boolean=false):TpvScene3D.TGroup.TInstance;
               function CreateVirtualInstance(const aHeadless:Boolean=false):TpvScene3D.TGroup.TVirtualInstance;
              public
@@ -23049,8 +23051,8 @@ var FBXScene:TpvFBXScene;
       end;
       PMaterialGroup=^TMaterialGroup;
       TMaterialGroupArray=array of TMaterialGroup;
- var MeshIndex,TriIndex,VertIndex,MaterialIdx,GroupIdx,
-     DestVertexIndex,GroupCount:TpvSizeInt;
+ var MeshIndex,TriangleIndex,VertexIndex,MaterialIndex,GroupIndex,
+     DestinationVertexIndex,GroupCount:TpvSizeInt;
      FBXMesh:TpvFBXMesh;
      FBXTriVert:TpvFBXMeshTriangleVertex;
      Mesh:TpvScene3D.TGroup.TMesh;
@@ -23069,13 +23071,13 @@ var FBXScene:TpvFBXScene;
    Mesh:=CreateMesh(TpvUTF8String(FBXMesh.Name));
    try
     GroupCount:=0;
-    for TriIndex:=0 to FBXMesh.TriangleVertices.Count-1 do begin
-     MaterialIdx:=FBXMesh.TriangleVertices[TriIndex].Material;
-     if MaterialIdx<0 then begin
-      MaterialIdx:=0;
+    for TriangleIndex:=0 to FBXMesh.TriangleVertices.Count-1 do begin
+     MaterialIndex:=FBXMesh.TriangleVertices[TriangleIndex].Material;
+     if MaterialIndex<0 then begin
+      MaterialIndex:=0;
      end;
-     if MaterialIdx>=GroupCount then begin
-      GroupCount:=MaterialIdx+1;
+     if MaterialIndex>=GroupCount then begin
+      GroupCount:=MaterialIndex+1;
      end;
     end;
     if GroupCount=0 then begin
@@ -23084,25 +23086,25 @@ var FBXScene:TpvFBXScene;
     MaterialGroups:=nil;
     SetLength(MaterialGroups,GroupCount);
     try
-     for GroupIdx:=0 to GroupCount-1 do begin
-      MaterialGroups[GroupIdx].Indices.Initialize;
+     for GroupIndex:=0 to GroupCount-1 do begin
+      MaterialGroups[GroupIndex].Indices.Initialize;
      end;
-     for TriIndex:=0 to FBXMesh.TriangleVertices.Count-1 do begin
-      MaterialIdx:=FBXMesh.TriangleVertices[TriIndex].Material;
-      if (MaterialIdx<0) or (MaterialIdx>=GroupCount) then begin
-       MaterialIdx:=0;
+     for TriangleIndex:=0 to FBXMesh.TriangleVertices.Count-1 do begin
+      MaterialIndex:=FBXMesh.TriangleVertices[TriangleIndex].Material;
+      if (MaterialIndex<0) or (MaterialIndex>=GroupCount) then begin
+       MaterialIndex:=0;
       end;
-      MaterialGroups[MaterialIdx].Indices.Add(TriIndex);
+      MaterialGroups[MaterialIndex].Indices.Add(TriangleIndex);
      end;
-     for GroupIdx:=0 to GroupCount-1 do begin
-      if MaterialGroups[GroupIdx].Indices.Count=0 then begin
+     for GroupIndex:=0 to GroupCount-1 do begin
+      if MaterialGroups[GroupIndex].Indices.Count=0 then begin
        continue;
       end;
       MeshPrimitive:=Mesh.CreatePrimitive;
       try
        MeshPrimitive.PrimitiveTopology:=TpvScene3D.TPrimitiveTopology.Triangles;
-       if (GroupIdx<FBXMesh.Materials.Count) then begin
-        if FBXMaterialMap.TryGet(TpvPtrUInt(pointer(FBXMesh.Materials[GroupIdx])),MaterialIDValue) then begin
+       if (GroupIndex<FBXMesh.Materials.Count) then begin
+        if FBXMaterialMap.TryGet(TpvPtrUInt(pointer(FBXMesh.Materials[GroupIndex])),MaterialIDValue) then begin
          MeshPrimitive.MaterialID:=MaterialIDValue;
          if (MaterialIDValue>=0) and (MaterialIDValue<fMaterials.Count) then begin
           MeshPrimitive.Material:=fMaterials[MaterialIDValue];
@@ -23117,15 +23119,15 @@ var FBXScene:TpvFBXScene;
         MeshPrimitive.MaterialID:=AddMaterial(fSceneInstance.EmptyMaterial);
         MeshPrimitive.Material:=fSceneInstance.EmptyMaterial;
        end;
-       for VertIndex:=0 to MaterialGroups[GroupIdx].Indices.Count-1 do begin
-        TriIndex:=MaterialGroups[GroupIdx].Indices[VertIndex];
-        FBXTriVert:=FBXMesh.TriangleVertices[TriIndex];
+       for VertexIndex:=0 to MaterialGroups[GroupIndex].Indices.Count-1 do begin
+        TriangleIndex:=MaterialGroups[GroupIndex].Indices[VertexIndex];
+        FBXTriVert:=FBXMesh.TriangleVertices[TriangleIndex];
         Position:=ConvertPosition(FBXTriVert.Position.x,FBXTriVert.Position.y,FBXTriVert.Position.z);
         Normal:=ConvertDirection(FBXTriVert.Normal.x,FBXTriVert.Normal.y,FBXTriVert.Normal.z);
         Tangent:=ConvertDirection(FBXTriVert.Tangent.x,FBXTriVert.Tangent.y,FBXTriVert.Tangent.z);
         Bitangent:=ConvertDirection(FBXTriVert.Bitangent.x,FBXTriVert.Bitangent.y,FBXTriVert.Bitangent.z);
-        DestVertexIndex:=-1;
-        MeshVertex:=MeshPrimitive.AddIndirectVertex(@DestVertexIndex);
+        DestinationVertexIndex:=-1;
+        MeshVertex:=MeshPrimitive.AddIndirectVertex(@DestinationVertexIndex);
         MeshVertex^.NodeIndex:=0;
         MeshVertex^.MaterialID:=0;
         MeshVertex^.Flags:=0;
@@ -23140,15 +23142,15 @@ var FBXScene:TpvFBXScene;
         MeshVertex^.MorphTargetVertexBaseIndex:=TpvUInt32($ffffffff);
         MeshVertex^.JointBlockBaseIndex:=0;
         MeshVertex^.CountJointBlocks:=0;
-        MeshPrimitive.AddIndex(DestVertexIndex);
+        MeshPrimitive.AddIndex(DestinationVertexIndex);
        end;
       finally
        MeshPrimitive.Finish;
       end;
      end;
     finally
-     for GroupIdx:=0 to GroupCount-1 do begin
-      MaterialGroups[GroupIdx].Indices.Finalize;
+     for GroupIndex:=0 to GroupCount-1 do begin
+      MaterialGroups[GroupIndex].Indices.Finalize;
      end;
      MaterialGroups:=nil;
     end;
@@ -23217,7 +23219,7 @@ var FBXScene:TpvFBXScene;
 
  procedure ProcessNodes;
   procedure ProcessFBXNode(const aFBXNode:TpvFBXNode;const aParentNode:TpvScene3D.TGroup.TNode);
-  var ChildIndex,ConnIdx,MeshIdx,CameraIdx,LightIdx:TpvSizeInt;
+  var ChildIndex,ConnectionIndex,MeshIndex,CameraIndex,LightIndex:TpvSizeInt;
       Node:TpvScene3D.TGroup.TNode;
       ChildFBXNode:TpvFBXNode;
       ConnObj:TpvFBXObject;
@@ -23242,24 +23244,24 @@ var FBXScene:TpvFBXScene;
    Node.fVisible:=aFBXNode.Visibility;
    // Link connected mesh, camera, light (NOT skin — done in LinkSkins)
    // FBX OO connections: DstObject.ConnectTo(SrcObject), so ConnectedTo has children
-   for ConnIdx:=0 to aFBXNode.ConnectedTo.Count-1 do begin
-    ConnObj:=aFBXNode.ConnectedTo[ConnIdx];
+   for ConnectionIndex:=0 to aFBXNode.ConnectedTo.Count-1 do begin
+    ConnObj:=aFBXNode.ConnectedTo[ConnectionIndex];
     if (ConnObj is TpvFBXMesh) and (not assigned(Node.fMesh)) then begin
-     if FBXMeshMap.TryGet(TpvPtrUInt(pointer(ConnObj)),MeshIdx) then begin
-      if (MeshIdx>=0) and (MeshIdx<fMeshes.Count) then begin
-       Node.fMesh:=fMeshes[MeshIdx];
+     if FBXMeshMap.TryGet(TpvPtrUInt(pointer(ConnObj)),MeshIndex) then begin
+      if (MeshIndex>=0) and (MeshIndex<fMeshes.Count) then begin
+       Node.fMesh:=fMeshes[MeshIndex];
       end;
      end;
     end else if (ConnObj is TpvFBXCamera) and (not assigned(Node.fCamera)) then begin
-     if FBXCameraMap.TryGet(TpvPtrUInt(pointer(ConnObj)),CameraIdx) then begin
-      if (CameraIdx>=0) and (CameraIdx<fCameras.Count) then begin
-       Node.fCamera:=fCameras[CameraIdx];
+     if FBXCameraMap.TryGet(TpvPtrUInt(pointer(ConnObj)),CameraIndex) then begin
+      if (CameraIndex>=0) and (CameraIndex<fCameras.Count) then begin
+       Node.fCamera:=fCameras[CameraIndex];
       end;
      end;
     end else if (ConnObj is TpvFBXLight) and (not assigned(Node.fLight)) then begin
-     if FBXLightMap.TryGet(TpvPtrUInt(pointer(ConnObj)),LightIdx) then begin
-      if (LightIdx>=0) and (LightIdx<fLights.Count) then begin
-       Node.fLight:=fLights[LightIdx];
+     if FBXLightMap.TryGet(TpvPtrUInt(pointer(ConnObj)),LightIndex) then begin
+      if (LightIndex>=0) and (LightIndex<fLights.Count) then begin
+       Node.fLight:=fLights[LightIndex];
        Node.fLight.fNodes.Add(Node);
       end;
      end;
@@ -23295,7 +23297,7 @@ var FBXScene:TpvFBXScene;
      Cluster:TpvFBXCluster;
      Skin:TpvScene3D.TGroup.TSkin;
      LinkNode:TpvFBXNode;
-     NodeIdx:TpvSizeInt;
+     NodeIndex:TpvSizeInt;
      InvBindMatrix:TpvMatrix4x4;
      FBXMatrix:TpvFBXMatrix4x4;
  begin
@@ -23315,8 +23317,8 @@ var FBXScene:TpvFBXScene;
        Cluster:=TpvFBXCluster(SkinDeformer.Clusters[ClusterIndex]);
        LinkNode:=Cluster.GetLink;
        if assigned(LinkNode) then begin
-        if FBXNodeMap.TryGet(TpvPtrUInt(pointer(LinkNode)),NodeIdx) then begin
-         Skin.fJoints.Add(NodeIdx);
+        if FBXNodeMap.TryGet(TpvPtrUInt(pointer(LinkNode)),NodeIndex) then begin
+         Skin.fJoints.Add(NodeIndex);
          // Convert TpvFBXMatrix4x4 (double) to TpvMatrix4x4 (float)
          FBXMatrix:=Cluster.TransformLink;
          for i:=0 to 3 do begin
@@ -23342,7 +23344,7 @@ var FBXScene:TpvFBXScene;
  var EntryIndex:TpvSizeInt;
      Entry:TFBXNodeEntry;
      Node:TpvScene3D.TGroup.TNode;
-     ConnIdx,SkinIdx,MeshIdx:TpvSizeInt;
+     ConnectionIndex,SkinIndex,MeshIndex:TpvSizeInt;
      ConnObj:TpvFBXObject;
  begin
   // Link skins to nodes that reference meshes with skin deformers
@@ -23352,12 +23354,12 @@ var FBXScene:TpvFBXScene;
     Node:=fNodes[Entry.NodeIndex];
     if assigned(Node.fMesh) then begin
      // Find the FBX mesh connected to this node and check for skin
-     for ConnIdx:=0 to Entry.FBXNode.ConnectedTo.Count-1 do begin
-      ConnObj:=Entry.FBXNode.ConnectedTo[ConnIdx];
+     for ConnectionIndex:=0 to Entry.FBXNode.ConnectedTo.Count-1 do begin
+      ConnObj:=Entry.FBXNode.ConnectedTo[ConnectionIndex];
       if ConnObj is TpvFBXMesh then begin
-       if FBXSkinMap.TryGet(TpvPtrUInt(pointer(ConnObj)),SkinIdx) then begin
-        if (SkinIdx>=0) and (SkinIdx<fSkins.Count) then begin
-         Node.fSkin:=fSkins[SkinIdx];
+       if FBXSkinMap.TryGet(TpvPtrUInt(pointer(ConnObj)),SkinIndex) then begin
+        if (SkinIndex>=0) and (SkinIndex<fSkins.Count) then begin
+         Node.fSkin:=fSkins[SkinIndex];
         end;
        end;
        break;
@@ -23372,15 +23374,15 @@ var FBXScene:TpvFBXScene;
  var Scene:TpvScene3D.TGroup.TScene;
      RootIndex:TpvSizeInt;
      RootObj:TpvFBXObject;
-     NodeIdx:TpvSizeInt;
+     NodeIndex:TpvSizeInt;
  begin
   Scene:=CreateScene('FBXScene');
   for RootIndex:=0 to FBXScene.RootNodes.Count-1 do begin
    RootObj:=FBXScene.RootNodes[RootIndex];
    if RootObj is TpvFBXNode then begin
-    if FBXNodeMap.TryGet(TpvPtrUInt(pointer(RootObj)),NodeIdx) then begin
-     if (NodeIdx>=0) and (NodeIdx<fNodes.Count) then begin
-      Scene.fNodes.Add(fNodes[NodeIdx]);
+    if FBXNodeMap.TryGet(TpvPtrUInt(pointer(RootObj)),NodeIndex) then begin
+     if (NodeIndex>=0) and (NodeIndex<fNodes.Count) then begin
+      Scene.fNodes.Add(fNodes[NodeIndex]);
      end;
     end;
    end;
@@ -23397,7 +23399,7 @@ var FBXScene:TpvFBXScene;
      Channel:TpvScene3D.TGroup.TAnimation.TChannel;
      CurveX,CurveY,CurveZ:TpvFBXAnimationCurve;
      Entry:TFBXNodeEntry;
-     NodeIdx:TpvSizeInt;
+     NodeIndex:TpvSizeInt;
      Prop:TpvFBXProperty;
      KeyTime:TpvDouble;
      BelongsToStack:Boolean;
@@ -23410,7 +23412,7 @@ var FBXScene:TpvFBXScene;
    // For each node, check if it has animated properties belonging to this stack
    for EntryIndex:=0 to FBXNodeEntries.Count-1 do begin
     Entry:=FBXNodeEntries.Items[EntryIndex];
-    NodeIdx:=Entry.NodeIndex;
+    NodeIndex:=Entry.NodeIndex;
     // Check 'LclTranslation' property (remapped from 'Lcl Translation')
     if Entry.FBXNode.PropertyByName.TryGetValue('LclTranslation',Prop) then begin
      if assigned(Prop) and assigned(Prop.ConnectedFrom) and (Prop.ConnectedFrom is TpvFBXAnimationCurveNode) then begin
@@ -23450,7 +23452,7 @@ var FBXScene:TpvFBXScene;
         if MinKeyCount>0 then begin
          Channel:=TpvScene3D.TGroup.TAnimation.TChannel.Create;
           Channel.fTarget:=TpvScene3D.TGroup.TAnimation.TChannel.TTarget.Translation;
-          Channel.fTargetIndex:=NodeIdx;
+          Channel.fTargetIndex:=NodeIndex;
           Channel.fInterpolation:=TpvScene3D.TGroup.TAnimation.TChannel.TInterpolation.Linear;
           SetLength(Channel.fInputTimeArray,MinKeyCount);
           SetLength(Channel.fOutputVector3Array,MinKeyCount);
@@ -23500,7 +23502,7 @@ var FBXScene:TpvFBXScene;
         if MinKeyCount>0 then begin
          Channel:=TpvScene3D.TGroup.TAnimation.TChannel.Create;
           Channel.fTarget:=TpvScene3D.TGroup.TAnimation.TChannel.TTarget.Rotation;
-          Channel.fTargetIndex:=NodeIdx;
+          Channel.fTargetIndex:=NodeIndex;
           Channel.fInterpolation:=TpvScene3D.TGroup.TAnimation.TChannel.TInterpolation.Linear;
           SetLength(Channel.fInputTimeArray,MinKeyCount);
           SetLength(Channel.fOutputVector4Array,MinKeyCount);
@@ -23550,7 +23552,7 @@ var FBXScene:TpvFBXScene;
         if MinKeyCount>0 then begin
          Channel:=TpvScene3D.TGroup.TAnimation.TChannel.Create;
           Channel.fTarget:=TpvScene3D.TGroup.TAnimation.TChannel.TTarget.Scale;
-          Channel.fTargetIndex:=NodeIdx;
+          Channel.fTargetIndex:=NodeIndex;
           Channel.fInterpolation:=TpvScene3D.TGroup.TAnimation.TChannel.TInterpolation.Linear;
           SetLength(Channel.fInputTimeArray,MinKeyCount);
           SetLength(Channel.fOutputVector3Array,MinKeyCount);
@@ -23653,11 +23655,653 @@ begin
 end;
 
 
+procedure TpvScene3D.TGroup.AssignFromDAE(const aSourceDAE:TpvDAELoader);
+type TDAENodeEntry=record
+      DAENode:TpvDAENode;
+      NodeIndex:TpvSizeInt;
+     end;
+     TDAENodeEntries=array of TDAENodeEntry;
+var DAEMaterialMap:TpvHashMap<TpvPtrUInt,TpvSizeInt>;
+    DAENodeMap:TpvHashMap<TpvPtrUInt,TpvSizeInt>;
+    DAEGeometryMeshMap:TpvHashMap<TpvPtrUInt,TpvSizeInt>;
+    DAECameraMap:TpvHashMap<TpvPtrUInt,TpvSizeInt>;
+    DAELightMap:TpvHashMap<TpvPtrUInt,TpvSizeInt>;
+    DAENodeEntries:TDAENodeEntries;
+    DAENodeEntryCount:TpvSizeInt;
+    UnitScaleFactor:TpvFloat;
+    CoordFlipYZ:Boolean;
+    VisualScene:TpvDAEVisualScene;
+
+ function ConvertPosition(const aV:TpvVector3):TpvVector3;
+ begin
+  if CoordFlipYZ then begin
+   result.x:=aV.x*UnitScaleFactor;
+   result.y:=aV.z*UnitScaleFactor;
+   result.z:=-aV.y*UnitScaleFactor;
+  end else begin
+   result:=aV*UnitScaleFactor;
+  end;
+ end;
+
+ function ConvertDirection(const aV:TpvVector3):TpvVector3;
+ begin
+  if CoordFlipYZ then begin
+   result.x:=aV.x;
+   result.y:=aV.z;
+   result.z:=-aV.y;
+  end else begin
+   result:=aV;
+  end;
+ end;
+
+ function ConvertMatrix(const aM:TpvMatrix4x4):TpvMatrix4x4;
+ var SwapMatrix:TpvMatrix4x4;
+ begin
+  if CoordFlipYZ then begin
+   // Swap Y and Z axes: pre- and post-multiply by the swap matrix
+   SwapMatrix:=TpvMatrix4x4.Identity;
+   SwapMatrix[1,1]:=0.0;
+   SwapMatrix[1,2]:=-1.0;
+   SwapMatrix[2,1]:=1.0;
+   SwapMatrix[2,2]:=0.0;
+   result:=SwapMatrix*aM*SwapMatrix.Inverse;
+  end else begin
+   result:=aM;
+  end;
+ end;
+
+ procedure ProcessMaterials;
+ var MaterialIndex:TpvSizeInt;
+     DAEMaterial:TpvDAEMaterial;
+     Material:TpvScene3D.TMaterial;
+     Opacity,Shininess:TpvFloat;
+ begin
+  for MaterialIndex:=0 to aSourceDAE.Materials.Count-1 do begin
+   DAEMaterial:=aSourceDAE.Materials[MaterialIndex];
+   Material:=TpvScene3D.TMaterial.Create(ResourceManager,fSceneInstance,nil);
+   try
+    Material.AssignFromEmpty;
+    Material.fName:=TpvUTF8String(DAEMaterial.Name);
+    Material.fData.ShadingModel:=TpvScene3D.TMaterial.TShadingModel.PBRMetallicRoughness;
+    if DAEMaterial.Diffuse.HasColor then begin
+     Material.fData.PBRMetallicRoughness.BaseColorFactor:=DAEMaterial.Diffuse.Color;
+    end else begin
+     Material.fData.PBRMetallicRoughness.BaseColorFactor:=TpvVector4.InlineableCreate(0.8,0.8,0.8,1.0);
+    end;
+    Opacity:=1.0-DAEMaterial.Transparency;
+    if Opacity<1.0 then begin
+     Material.fData.PBRMetallicRoughness.BaseColorFactor.w:=Opacity;
+     Material.fData.AlphaMode:=TpvScene3D.TMaterial.TAlphaMode.Blend;
+    end else begin
+     Material.fData.AlphaMode:=TpvScene3D.TMaterial.TAlphaMode.Opaque;
+    end;
+    Shininess:=DAEMaterial.Shininess;
+    if Shininess>0.0 then begin
+     Material.fData.PBRMetallicRoughness.RoughnessFactor:=1.0-Min(Shininess/100.0,1.0);
+    end else begin
+     Material.fData.PBRMetallicRoughness.RoughnessFactor:=0.5;
+    end;
+    Material.fData.PBRMetallicRoughness.MetallicFactor:=0.0;
+    if DAEMaterial.Emission.HasColor then begin
+     Material.fData.EmissiveFactor:=DAEMaterial.Emission.Color;
+    end;
+    Material.fData.DoubleSided:=true;
+    Material.FillShaderData;
+   finally
+    DAEMaterialMap.Add(TpvPtrUInt(pointer(DAEMaterial)),AddMaterial(Material,false,false));
+   end;
+  end;
+ end;
+
+ // ProcessGeometry is called per-geometry from ProcessNodes below
+
+ function ProcessGeometry(const aGeometry:TpvDAEGeometry;const aOwnerNode:TpvScene3D.TGroup.TNode):TpvScene3D.TGroup.TMesh;
+ var MeshIndex,TriangleIndex,VertexIndex,MorphTargetIndex,DestinationVertexIndex,WeightIndex:TpvSizeInt;
+     MaterialID:TpvSizeInt;
+     DAEMesh:TpvDAEMesh;
+     DAEVertex:PpvDAEVertex;
+     MorphVertex:PpvDAEVertex;
+     Mesh:TpvScene3D.TGroup.TMesh;
+     MeshPrimitive:TpvScene3D.TGroup.TMesh.TPrimitive;
+     MeshVertex:TpvScene3D.PVertex;
+     Target:TpvScene3D.TGroup.TMesh.TPrimitive.TTarget;
+     TargetVertex:TpvScene3D.TGroup.TMesh.TPrimitive.TTarget.PTargetVertex;
+     CountMorphTargets:TpvSizeInt;
+     ExistingMeshIndex:TpvSizeInt;
+ begin
+  result:=nil;
+  if DAEGeometryMeshMap.TryGet(TpvPtrUInt(pointer(aGeometry)),ExistingMeshIndex) then begin
+   if (ExistingMeshIndex>=0) and (ExistingMeshIndex<fMeshes.Count) then begin
+    result:=fMeshes[ExistingMeshIndex];
+    exit;
+   end;
+  end;
+  Mesh:=CreateMesh(TpvUTF8String(aGeometry.ParentNode.Name));
+  DAEGeometryMeshMap.Add(TpvPtrUInt(pointer(aGeometry)),fMeshes.IndexOf(Mesh));
+  CountMorphTargets:=0;
+  for MeshIndex:=0 to aGeometry.Count-1 do begin
+   DAEMesh:=aGeometry[MeshIndex];
+   if DAEMesh.MeshType<>dlmtTRIANGLES then begin
+    continue;
+   end;
+   if length(DAEMesh.Vertices)=0 then begin
+    continue;
+   end;
+   MeshPrimitive:=Mesh.CreatePrimitive;
+   MeshPrimitive.PrimitiveTopology:=TpvScene3D.TPrimitiveTopology.Triangles;
+   // Assign material
+   if (DAEMesh.MaterialIndex>=0) and DAEMaterialMap.ExistKey(TpvPtrUInt(pointer(aSourceDAE.Materials[DAEMesh.MaterialIndex]))) then begin
+    MaterialID:=DAEMaterialMap[TpvPtrUInt(pointer(aSourceDAE.Materials[DAEMesh.MaterialIndex]))];
+    MeshPrimitive.MaterialID:=MaterialID;
+    MeshPrimitive.Material:=fMaterials[MaterialID];
+   end else begin
+    MeshPrimitive.MaterialID:=AddMaterial(fSceneInstance.EmptyMaterial);
+    MeshPrimitive.Material:=fSceneInstance.EmptyMaterial;
+   end;
+   try
+    // Morph targets setup
+    CountMorphTargets:=length(DAEMesh.MorphTargetVertices);
+    if CountMorphTargets>0 then begin
+     for MorphTargetIndex:=0 to CountMorphTargets-1 do begin
+      Target:=TpvScene3D.TGroup.TMesh.TPrimitive.TTarget.Create(MeshPrimitive);
+      try
+       Target.fVertices.Resize(length(DAEMesh.Vertices));
+      finally
+       Target.fIndex:=MeshPrimitive.fTargets.Add(Target);
+      end;
+     end;
+    end;
+    // Vertices
+    for VertexIndex:=0 to length(DAEMesh.Vertices)-1 do begin
+     DAEVertex:=@DAEMesh.Vertices[VertexIndex];
+     DestinationVertexIndex:=-1;
+     MeshVertex:=MeshPrimitive.AddIndirectVertex(@DestinationVertexIndex);
+     MeshVertex^.NodeIndex:=0;
+     MeshVertex^.MaterialID:=0;
+     MeshVertex^.Flags:=0;
+     MeshVertex^.Position:=ConvertPosition(DAEVertex^.Position);
+     MeshVertex^.SetTangentSpaceVectors(ConvertDirection(DAEVertex^.Tangent),ConvertDirection(DAEVertex^.Bitangent),ConvertDirection(DAEVertex^.Normal));
+     if DAEVertex^.CountTexCoords>0 then begin
+      MeshVertex^.TexCoord0:=DAEVertex^.TexCoords[0];
+     end else begin
+      MeshVertex^.TexCoord0:=TpvVector2.Origin;
+     end;
+     if DAEVertex^.CountTexCoords>1 then begin
+      MeshVertex^.TexCoord1:=DAEVertex^.TexCoords[1];
+     end else begin
+      MeshVertex^.TexCoord1:=TpvVector2.Origin;
+     end;
+     MeshVertex^.Color0.r:=DAEVertex^.Color.x;
+     MeshVertex^.Color0.g:=DAEVertex^.Color.y;
+     MeshVertex^.Color0.b:=DAEVertex^.Color.z;
+     MeshVertex^.Color0.a:=1.0;
+     MeshVertex^.MorphTargetVertexBaseIndex:=TpvUInt32($ffffffff);
+     MeshVertex^.JointBlockBaseIndex:=0;
+     MeshVertex^.CountJointBlocks:=0;
+     // Morph target deltas
+     for MorphTargetIndex:=0 to CountMorphTargets-1 do begin
+      MorphVertex:=@DAEMesh.MorphTargetVertices[MorphTargetIndex][VertexIndex];
+      TargetVertex:=@MeshPrimitive.fTargets[MorphTargetIndex].fVertices.ItemArray[VertexIndex];
+      TargetVertex^.Position:=ConvertPosition(MorphVertex^.Position)-MeshVertex^.Position;
+      TargetVertex^.Normal:=ConvertDirection(MorphVertex^.Normal);
+      TargetVertex^.Tangent:=ConvertDirection(MorphVertex^.Tangent);
+     end;
+    end;
+    // Indices
+    for TriangleIndex:=0 to length(DAEMesh.Indices)-1 do begin
+     MeshPrimitive.AddIndex(DAEMesh.Indices[TriangleIndex]);
+    end;
+   finally
+    MeshPrimitive.Finish;
+   end;
+  end;
+  // Morph target weights on node
+  if CountMorphTargets>0 then begin
+   aOwnerNode.fWeights.ClearNoFree;
+   for MorphTargetIndex:=0 to CountMorphTargets-1 do begin
+    if MorphTargetIndex<length(aGeometry.MorphTargetWeights) then begin
+     aOwnerNode.fWeights.Add(aGeometry.MorphTargetWeights[MorphTargetIndex]);
+    end else begin
+     aOwnerNode.fWeights.Add(0.0);
+    end;
+   end;
+   aOwnerNode.fWeights.Finish;
+   Mesh.fCountMorphTargets:=CountMorphTargets;
+  end;
+  Mesh.Finish;
+  result:=Mesh;
+ end;
+
+ procedure ProcessCameras;
+ var CameraIndex:TpvSizeInt;
+     DAECamera:TpvDAECamera;
+     Camera:TpvScene3D.TGroup.TCamera;
+ begin
+  for CameraIndex:=0 to aSourceDAE.CameraList.Count-1 do begin
+   DAECamera:=aSourceDAE.CameraList[CameraIndex];
+   Camera:=CreateCamera(TpvUTF8String(DAECamera.Name));
+   if DAECamera.CameraType=dlctPERSPECTIVE then begin
+    Camera.fPointerToCameraData^.Type_:=TpvScene3D.TCameraData.TCameraType.Perspective;
+    if DAECamera.YFov>0.0 then begin
+     Camera.fPointerToCameraData^.Perspective.YFoV:=DAECamera.YFov*(PI/180.0);
+    end else if DAECamera.XFov>0.0 then begin
+     Camera.fPointerToCameraData^.Perspective.YFoV:=DAECamera.XFov*(PI/180.0);
+    end else begin
+     Camera.fPointerToCameraData^.Perspective.YFoV:=60.0*(PI/180.0);
+    end;
+    Camera.fPointerToCameraData^.Perspective.ZNear:=DAECamera.ZNear*UnitScaleFactor;
+    Camera.fPointerToCameraData^.Perspective.ZFar:=DAECamera.ZFar*UnitScaleFactor;
+    Camera.fPointerToCameraData^.Perspective.AspectRatio:=DAECamera.AspectRatio;
+   end else begin
+    Camera.fPointerToCameraData^.Type_:=TpvScene3D.TCameraData.TCameraType.Orthographic;
+    Camera.fPointerToCameraData^.Orthographic.XMag:=DAECamera.XMag*UnitScaleFactor;
+    Camera.fPointerToCameraData^.Orthographic.YMag:=DAECamera.YMag*UnitScaleFactor;
+    Camera.fPointerToCameraData^.Orthographic.ZNear:=DAECamera.ZNear*UnitScaleFactor;
+    Camera.fPointerToCameraData^.Orthographic.ZFar:=DAECamera.ZFar*UnitScaleFactor;
+   end;
+   DAECameraMap.Add(TpvPtrUInt(pointer(DAECamera)),fCameras.IndexOf(Camera));
+  end;
+ end;
+
+ // Lights are created inline during ProcessNodes below
+
+ procedure ProcessNodes;
+  procedure ProcessDAENode(const aDAENode:TpvDAENode;const aParentNode:TpvScene3D.TGroup.TNode);
+  var ChildIndex,TransformIndex,GeometryIndex,CameraIndex,LightIndex:TpvSizeInt;
+      Node:TpvScene3D.TGroup.TNode;
+      Transform:TpvDAETransform;
+      LocalMatrix:TpvMatrix4x4;
+      Decomposed:TpvDecomposedMatrix4x4;
+      DAECamera:TpvDAECamera;
+      DAELight:TpvDAELight;
+      Light:TpvScene3D.TGroup.TLight;
+      MappedCameraIndex:TpvSizeInt;
+      NodeEntry:TDAENodeEntry;
+  begin
+   Node:=CreateNode(TpvUTF8String(aDAENode.Name));
+   DAENodeMap.Add(TpvPtrUInt(pointer(aDAENode)),fNodes.IndexOf(Node));
+   NodeEntry.DAENode:=aDAENode;
+   NodeEntry.NodeIndex:=fNodes.IndexOf(Node);
+   if DAENodeEntryCount>=length(DAENodeEntries) then begin
+    SetLength(DAENodeEntries,(DAENodeEntryCount+1)*2);
+   end;
+   DAENodeEntries[DAENodeEntryCount]:=NodeEntry;
+   inc(DAENodeEntryCount);
+   // Compute local transform from transform stack
+   LocalMatrix:=TpvMatrix4x4.Identity;
+   for TransformIndex:=0 to aDAENode.Transforms.Count-1 do begin
+    Transform:=aDAENode.Transforms[TransformIndex];
+    if Transform is TpvDAETransformMatrix then begin
+     Transform.Matrix[3,3]:=1;
+    end;
+    Transform.Convert;
+    LocalMatrix:=Transform.Matrix*LocalMatrix;
+   end;
+   LocalMatrix:=ConvertMatrix(LocalMatrix);
+   Decomposed:=LocalMatrix.Decompose;
+   if Decomposed.Valid then begin
+    Node.fTranslation:=Decomposed.Translation;
+    Node.fRotation:=Decomposed.Rotation;
+    Node.fScale:=Decomposed.Scale;
+   end else begin
+    Node.fTranslation:=TpvVector3.Origin;
+    Node.fRotation:=TpvQuaternion.Identity;
+    Node.fScale:=TpvVector3.InlineableCreate(1.0,1.0,1.0);
+   end;
+   Node.fMatrix:=TpvMatrix4x4.Identity;
+   Node.fVisible:=aDAENode.Visible;
+   // Link geometries
+   for GeometryIndex:=0 to aDAENode.Geometries.Count-1 do begin
+    if not assigned(Node.fMesh) then begin
+     Node.fMesh:=ProcessGeometry(aDAENode.Geometries[GeometryIndex],Node);
+    end;
+   end;
+   // Link cameras
+   for CameraIndex:=0 to aDAENode.Cameras.Count-1 do begin
+    DAECamera:=aDAENode.Cameras[CameraIndex];
+    if DAECameraMap.TryGet(TpvPtrUInt(pointer(DAECamera)),MappedCameraIndex) then begin
+     if (MappedCameraIndex>=0) and (MappedCameraIndex<fCameras.Count) and (not assigned(Node.fCamera)) then begin
+      Node.fCamera:=fCameras[MappedCameraIndex];
+     end;
+    end;
+   end;
+   // Create and link lights
+   for LightIndex:=0 to aDAENode.Lights.Count-1 do begin
+    DAELight:=aDAENode.Lights[LightIndex];
+    if DAELight.LightType=dlltAMBIENT then begin
+     continue; // No Scene3D equivalent for ambient lights
+    end;
+    if not assigned(Node.fLight) then begin
+     Light:=CreateLight(TpvUTF8String(DAELight.Name));
+     case DAELight.LightType of
+      dlltDIRECTIONAL:begin
+       Light.fData.fType_:=TpvScene3D.TLightData.TLightType.Directional;
+      end;
+      dllTPOINT:begin
+       Light.fData.fType_:=TpvScene3D.TLightData.TLightType.Point;
+      end;
+      dlltSPOT:begin
+       Light.fData.fType_:=TpvScene3D.TLightData.TLightType.Spot;
+       Light.fData.fOuterConeAngle:=DAELight.FallOffAngle*(PI/180.0);
+       Light.fData.fInnerConeAngle:=Light.fData.fOuterConeAngle*0.8;
+      end;
+      else begin
+       Light.fData.fType_:=TpvScene3D.TLightData.TLightType.Point;
+      end;
+     end;
+     Light.fData.fColor:=DAELight.Color;
+     Light.fData.fIntensity:=1.0;
+     Light.fData.fRange:=0.0;
+     Light.fData.fCastShadows:=true;
+     Light.fData.fVisible:=true;
+     Node.fLight:=Light;
+     Light.fNodes.Add(Node);
+     DAELightMap.Add(TpvPtrUInt(pointer(DAELight)),fLights.IndexOf(Light));
+    end;
+   end;
+   // Parent linkage
+   if assigned(aParentNode) then begin
+    aParentNode.fChildren.Add(Node);
+   end;
+   // Recurse children
+   for ChildIndex:=0 to aDAENode.Nodes.Count-1 do begin
+    ProcessDAENode(aDAENode.Nodes[ChildIndex],Node);
+   end;
+  end;
+ var RootIndex:TpvSizeInt;
+ begin
+  if assigned(VisualScene) and assigned(VisualScene.Root) then begin
+   for RootIndex:=0 to VisualScene.Root.Nodes.Count-1 do begin
+    ProcessDAENode(VisualScene.Root.Nodes[RootIndex],nil);
+   end;
+  end;
+ end;
+
+ procedure ProcessSkins;
+ var EntryIndex,GeometryIndex,JointIndex,NodeIndex:TpvSizeInt;
+     DAENode:TpvDAENode;
+     Node:TpvScene3D.TGroup.TNode;
+     Geometry:TpvDAEGeometry;
+     Skin:TpvScene3D.TGroup.TSkin;
+     InvBind:TpvMatrix4x4;
+ begin
+  for EntryIndex:=0 to DAENodeEntryCount-1 do begin
+   DAENode:=DAENodeEntries[EntryIndex].DAENode;
+   NodeIndex:=DAENodeEntries[EntryIndex].NodeIndex;
+   if (NodeIndex<0) or (NodeIndex>=fNodes.Count) then begin
+    continue;
+   end;
+   Node:=fNodes[NodeIndex];
+   for GeometryIndex:=0 to DAENode.Geometries.Count-1 do begin
+    Geometry:=DAENode.Geometries[GeometryIndex];
+    if length(Geometry.JointNodes)=0 then begin
+     continue;
+    end;
+    if not assigned(Node.fMesh) then begin
+     continue;
+    end;
+    Skin:=CreateSkin(TpvUTF8String(DAENode.Name)+'_skin');
+    // Map joints
+    for JointIndex:=0 to length(Geometry.JointNodes)-1 do begin
+     if assigned(Geometry.JointNodes[JointIndex]) then begin
+      if DAENodeMap.TryGet(TpvPtrUInt(pointer(Geometry.JointNodes[JointIndex])),NodeIndex) then begin
+       Skin.fJoints.Add(NodeIndex);
+      end else begin
+       Skin.fJoints.Add(-1);
+      end;
+     end else begin
+      Skin.fJoints.Add(-1);
+     end;
+    end;
+    Skin.fJoints.Finish;
+    // Inverse bind matrices (premultiplied with BindShapeMatrix)
+    for JointIndex:=0 to length(Geometry.InverseBindMatrices)-1 do begin
+     InvBind:=Geometry.InverseBindMatrices[JointIndex]*Geometry.BindShapeMatrix;
+     Skin.fInverseBindMatrices.Add(ConvertMatrix(InvBind));
+    end;
+    Skin.fInverseBindMatrices.Finish;
+    // Skeleton root
+    Skin.fSkeleton:=-1;
+    if length(Geometry.JointNodes)>0 then begin
+     if assigned(Geometry.JointNodes[0]) then begin
+      if DAENodeMap.TryGet(TpvPtrUInt(pointer(Geometry.JointNodes[0])),NodeIndex) then begin
+       Skin.fSkeleton:=NodeIndex;
+      end;
+     end;
+    end;
+    Node.fSkin:=Skin;
+    break; // Only one skin per node
+   end;
+  end;
+ end;
+
+ procedure ProcessScene;
+ var Scene:TpvScene3D.TGroup.TScene;
+     RootIndex:TpvSizeInt;
+     NodeIndex:TpvSizeInt;
+ begin
+  Scene:=CreateScene('DAEScene');
+  if assigned(VisualScene) and assigned(VisualScene.Root) then begin
+   for RootIndex:=0 to VisualScene.Root.Nodes.Count-1 do begin
+    if DAENodeMap.TryGet(TpvPtrUInt(pointer(VisualScene.Root.Nodes[RootIndex])),NodeIndex) then begin
+     if (NodeIndex>=0) and (NodeIndex<fNodes.Count) then begin
+      Scene.fNodes.Add(fNodes[NodeIndex]);
+     end;
+    end;
+   end;
+  end;
+  fScene:=Scene;
+ end;
+
+ procedure ProcessAnimations;
+ var AnimationIndex,ChannelIndex,EntryIndex,ValueIndex,KeyFrameIndex,SampleCount:TpvSizeInt;
+     DAEAnimation:TpvDAEAnimation;
+     DAEChannel:TpvDAEAnimationChannel;
+     Animation:TpvScene3D.TGroup.TAnimation;
+     Channel:TpvScene3D.TGroup.TAnimation.TChannel;
+     OwnerNode:TpvDAENode;
+     NodeIndex:TpvSizeInt;
+     KeyTime,SampleTime,TimeStep:TpvDouble;
+     SampledMatrix:TpvMatrix4x4;
+     Decomposed:TpvDecomposedMatrix4x4;
+     ChannelHandled:Boolean;
+ begin
+  for AnimationIndex:=0 to aSourceDAE.Animations.Count-1 do begin
+   DAEAnimation:=aSourceDAE.Animations[AnimationIndex];
+   if DAEAnimation.Channels.Count=0 then begin
+    continue;
+   end;
+   Animation:=CreateAnimation(TpvUTF8String(DAEAnimation.Name));
+   for ChannelIndex:=0 to DAEAnimation.Channels.Count-1 do begin
+    DAEChannel:=DAEAnimation.Channels[ChannelIndex];
+    if (not assigned(DAEChannel.DestinationObject)) or (DAEChannel.CountLinearKeyFrames<=0) or (DAEChannel.CountValues<=0) then begin
+     continue;
+    end;
+    // Find the owning node for this channel's destination object
+    OwnerNode:=DAEChannel.Node;
+    if not assigned(OwnerNode) then begin
+     continue;
+    end;
+    if not DAENodeMap.TryGet(TpvPtrUInt(pointer(OwnerNode)),NodeIndex) then begin
+     continue;
+    end;
+    if (NodeIndex<0) or (NodeIndex>=fNodes.Count) then begin
+     continue;
+    end;
+    ChannelHandled:=false;
+    if DAEChannel.DestinationObject is TpvDAETransformTranslate then begin // Translation channel
+     if DAEChannel.CountValues>=3 then begin
+      Channel:=TpvScene3D.TGroup.TAnimation.TChannel.Create;
+      Channel.fTarget:=TpvScene3D.TGroup.TAnimation.TChannel.TTarget.Translation;
+      Channel.fTargetIndex:=NodeIndex;
+      Channel.fInterpolation:=TpvScene3D.TGroup.TAnimation.TChannel.TInterpolation.Linear;
+      SetLength(Channel.fInputTimeArray,DAEChannel.CountLinearKeyFrames);
+      SetLength(Channel.fOutputVector3Array,DAEChannel.CountLinearKeyFrames);
+      for KeyFrameIndex:=0 to DAEChannel.CountLinearKeyFrames-1 do begin
+       KeyTime:=DAEChannel.StartTime+KeyFrameIndex*DAEChannel.TimeStep;
+       Channel.fInputTimeArray[KeyFrameIndex]:=KeyTime;
+       Channel.fOutputVector3Array[KeyFrameIndex]:=ConvertPosition(TpvVector3.InlineableCreate(DAEChannel.GetInterpolatedValue(KeyTime,0),DAEChannel.GetInterpolatedValue(KeyTime,1),DAEChannel.GetInterpolatedValue(KeyTime,2)));
+      end;
+      Animation.fChannels.Add(Channel);
+      ChannelHandled:=true;
+     end;
+    end else if DAEChannel.DestinationObject is TpvDAETransformRotate then begin // Rotation channel (axis-angle to quaternion)
+     Channel:=TpvScene3D.TGroup.TAnimation.TChannel.Create;
+     Channel.fTarget:=TpvScene3D.TGroup.TAnimation.TChannel.TTarget.Rotation;
+     Channel.fTargetIndex:=NodeIndex;
+     Channel.fInterpolation:=TpvScene3D.TGroup.TAnimation.TChannel.TInterpolation.Linear;
+     SetLength(Channel.fInputTimeArray,DAEChannel.CountLinearKeyFrames);
+     SetLength(Channel.fOutputVector4Array,DAEChannel.CountLinearKeyFrames);
+     for KeyFrameIndex:=0 to DAEChannel.CountLinearKeyFrames-1 do begin
+      KeyTime:=DAEChannel.StartTime+KeyFrameIndex*DAEChannel.TimeStep;
+      Channel.fInputTimeArray[KeyFrameIndex]:=KeyTime;
+      if DAEChannel.CountValues>=4 then begin // Full axis + angle
+       Channel.fOutputVector4Array[KeyFrameIndex]:=TpvQuaternion.CreateFromAngleAxis(DAEChannel.GetInterpolatedValue(KeyTime,3)*(PI/180.0),ConvertDirection(TpvVector3.InlineableCreate(DAEChannel.GetInterpolatedValue(KeyTime,0),DAEChannel.GetInterpolatedValue(KeyTime,1),DAEChannel.GetInterpolatedValue(KeyTime,2)))).Vector;
+      end else begin // Single angle component on existing axis
+       Channel.fOutputVector4Array[KeyFrameIndex]:=TpvQuaternion.CreateFromAngleAxis(DAEChannel.GetInterpolatedValue(KeyTime,0)*(PI/180.0),ConvertDirection(TpvDAETransformRotate(DAEChannel.DestinationObject).Axis)).Vector;
+      end;
+     end;
+     Animation.fChannels.Add(Channel);
+     ChannelHandled:=true;
+    end else if DAEChannel.DestinationObject is TpvDAETransformScale then begin // Scale channel
+     if DAEChannel.CountValues>=3 then begin
+      Channel:=TpvScene3D.TGroup.TAnimation.TChannel.Create;
+      Channel.fTarget:=TpvScene3D.TGroup.TAnimation.TChannel.TTarget.Scale;
+      Channel.fTargetIndex:=NodeIndex;
+      Channel.fInterpolation:=TpvScene3D.TGroup.TAnimation.TChannel.TInterpolation.Linear;
+      SetLength(Channel.fInputTimeArray,DAEChannel.CountLinearKeyFrames);
+      SetLength(Channel.fOutputVector3Array,DAEChannel.CountLinearKeyFrames);
+      for KeyFrameIndex:=0 to DAEChannel.CountLinearKeyFrames-1 do begin
+       KeyTime:=DAEChannel.StartTime+KeyFrameIndex*DAEChannel.TimeStep;
+       Channel.fInputTimeArray[KeyFrameIndex]:=KeyTime;
+       Channel.fOutputVector3Array[KeyFrameIndex]:=TpvVector3.InlineableCreate(DAEChannel.GetInterpolatedValue(KeyTime,0),DAEChannel.GetInterpolatedValue(KeyTime,1),DAEChannel.GetInterpolatedValue(KeyTime,2));
+      end;
+      Animation.fChannels.Add(Channel);
+      ChannelHandled:=true;
+     end;
+    end else if DAEChannel.DestinationObject is TpvDAETransformMatrix then begin // Matrix channel, decompose into T/R/S
+     if DAEChannel.CountValues>=16 then begin
+      Channel:=TpvScene3D.TGroup.TAnimation.TChannel.Create; // Translation from matrix
+      Channel.fTarget:=TpvScene3D.TGroup.TAnimation.TChannel.TTarget.Translation;
+      Channel.fTargetIndex:=NodeIndex;
+      Channel.fInterpolation:=TpvScene3D.TGroup.TAnimation.TChannel.TInterpolation.Linear;
+      SetLength(Channel.fInputTimeArray,DAEChannel.CountLinearKeyFrames);
+      SetLength(Channel.fOutputVector3Array,DAEChannel.CountLinearKeyFrames);
+      for KeyFrameIndex:=0 to DAEChannel.CountLinearKeyFrames-1 do begin
+       KeyTime:=DAEChannel.StartTime+KeyFrameIndex*DAEChannel.TimeStep;
+       Channel.fInputTimeArray[KeyFrameIndex]:=KeyTime;
+       SampledMatrix:=ConvertMatrix(DAEChannel.GetInterpolatedValuesMatrix(KeyTime));
+       Decomposed:=SampledMatrix.Decompose;
+       Channel.fOutputVector3Array[KeyFrameIndex]:=Decomposed.Translation;
+      end;
+      Animation.fChannels.Add(Channel);
+      Channel:=TpvScene3D.TGroup.TAnimation.TChannel.Create; // Rotation from matrix
+      Channel.fTarget:=TpvScene3D.TGroup.TAnimation.TChannel.TTarget.Rotation;
+      Channel.fTargetIndex:=NodeIndex;
+      Channel.fInterpolation:=TpvScene3D.TGroup.TAnimation.TChannel.TInterpolation.Linear;
+      SetLength(Channel.fInputTimeArray,DAEChannel.CountLinearKeyFrames);
+      SetLength(Channel.fOutputVector4Array,DAEChannel.CountLinearKeyFrames);
+      for KeyFrameIndex:=0 to DAEChannel.CountLinearKeyFrames-1 do begin
+       KeyTime:=DAEChannel.StartTime+KeyFrameIndex*DAEChannel.TimeStep;
+       Channel.fInputTimeArray[KeyFrameIndex]:=KeyTime;
+       SampledMatrix:=ConvertMatrix(DAEChannel.GetInterpolatedValuesMatrix(KeyTime));
+       Decomposed:=SampledMatrix.Decompose;
+       Channel.fOutputVector4Array[KeyFrameIndex]:=Decomposed.Rotation.Vector;
+      end;
+      Animation.fChannels.Add(Channel);
+      Channel:=TpvScene3D.TGroup.TAnimation.TChannel.Create; // Scale from matrix
+      Channel.fTarget:=TpvScene3D.TGroup.TAnimation.TChannel.TTarget.Scale;
+      Channel.fTargetIndex:=NodeIndex;
+      Channel.fInterpolation:=TpvScene3D.TGroup.TAnimation.TChannel.TInterpolation.Linear;
+      SetLength(Channel.fInputTimeArray,DAEChannel.CountLinearKeyFrames);
+      SetLength(Channel.fOutputVector3Array,DAEChannel.CountLinearKeyFrames);
+      for KeyFrameIndex:=0 to DAEChannel.CountLinearKeyFrames-1 do begin
+       KeyTime:=DAEChannel.StartTime+KeyFrameIndex*DAEChannel.TimeStep;
+       Channel.fInputTimeArray[KeyFrameIndex]:=KeyTime;
+       SampledMatrix:=ConvertMatrix(DAEChannel.GetInterpolatedValuesMatrix(KeyTime));
+       Decomposed:=SampledMatrix.Decompose;
+       Channel.fOutputVector3Array[KeyFrameIndex]:=Decomposed.Scale;
+      end;
+      Animation.fChannels.Add(Channel);
+      ChannelHandled:=true;
+     end;
+    end else if DAEChannel.DestinationObject is TpvDAEGeometry then begin // Morph target weights
+     if (DAEChannel.DestinationElement>=0) and (DAEChannel.CountValues>=1) then begin
+      Channel:=TpvScene3D.TGroup.TAnimation.TChannel.Create;
+      Channel.fTarget:=TpvScene3D.TGroup.TAnimation.TChannel.TTarget.Weights;
+      Channel.fTargetIndex:=NodeIndex;
+      Channel.fInterpolation:=TpvScene3D.TGroup.TAnimation.TChannel.TInterpolation.Linear;
+      SetLength(Channel.fInputTimeArray,DAEChannel.CountLinearKeyFrames);
+      SetLength(Channel.fOutputScalarArray,DAEChannel.CountLinearKeyFrames);
+      for KeyFrameIndex:=0 to DAEChannel.CountLinearKeyFrames-1 do begin
+       KeyTime:=DAEChannel.StartTime+KeyFrameIndex*DAEChannel.TimeStep;
+       Channel.fInputTimeArray[KeyFrameIndex]:=KeyTime;
+       Channel.fOutputScalarArray[KeyFrameIndex]:=DAEChannel.GetInterpolatedValue(KeyTime,0);
+      end;
+      Animation.fChannels.Add(Channel);
+      ChannelHandled:=true;
+     end;
+    end;
+   end;
+  end;
+ end;
+
+begin
+
+ DAEMaterialMap:=TpvHashMap<TpvPtrUInt,TpvSizeInt>.Create(-1);
+ DAENodeMap:=TpvHashMap<TpvPtrUInt,TpvSizeInt>.Create(-1);
+ DAEGeometryMeshMap:=TpvHashMap<TpvPtrUInt,TpvSizeInt>.Create(-1);
+ DAECameraMap:=TpvHashMap<TpvPtrUInt,TpvSizeInt>.Create(-1);
+ DAELightMap:=TpvHashMap<TpvPtrUInt,TpvSizeInt>.Create(-1);
+ DAENodeEntries:=nil;
+ DAENodeEntryCount:=0;
+ try
+
+  UnitScaleFactor:=aSourceDAE.UnitMeter;
+  CoordFlipYZ:=aSourceDAE.UpAxis=dluaZUP;
+
+  if assigned(aSourceDAE.MainVisualScene) then begin
+   VisualScene:=aSourceDAE.MainVisualScene;
+  end else if aSourceDAE.VisualScenes.Count>0 then begin
+   VisualScene:=aSourceDAE.VisualScenes[0];
+  end else begin
+   VisualScene:=nil;
+  end;
+
+  ProcessMaterials;
+
+  ProcessCameras;
+
+  ProcessNodes;
+
+  ProcessSkins;
+
+  ProcessScene;
+
+  ProcessAnimations;
+
+  MarkLODVariants;
+
+  Finish;
+
+ finally
+  DAENodeEntries:=nil;
+  FreeAndNil(DAELightMap);
+  FreeAndNil(DAECameraMap);
+  FreeAndNil(DAEGeometryMeshMap);
+  FreeAndNil(DAENodeMap);
+  FreeAndNil(DAEMaterialMap);
+ end;
+
+end;
+
+
 function TpvScene3D.TGroup.BeginLoad(const aStream:TStream):boolean;
 var GLTF:TPasGLTF.TDocument;
     FBX:TpvFBXLoader;
     SAM:TpvSAM.TModel;
     OBJ:TpvOBJModel;
+    DAE:TpvDAELoader;
 begin
  result:=false;
 //fSceneInstance.fLoadLock.Acquire;
@@ -23718,6 +24362,17 @@ begin
        FreeAndNil(OBJ);
       end;
       result:=true;
+     end;
+     TpvScene3D.TFileType.ColladaDAE:begin
+      DAE:=TpvDAELoader.Create;
+      try
+       if DAE.Load(aStream) then begin
+        AssignFromDAE(DAE);
+        result:=true;
+       end;
+      finally
+       FreeAndNil(DAE);
+      end;
      end;
      else begin
      end;
