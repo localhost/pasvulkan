@@ -977,6 +977,7 @@ type PpvAudioInt32=^TpvInt32;
        fTemporaryBuffer:PpvAudioFloats;
        fOnFillBuffer:TpvAudioOnFillBuffer;
        fOnSecondFillBuffer:TpvAudioOnFillBuffer;
+       fOnThirdFillBuffer:TpvAudioOnFillBuffer;
        procedure CalcEvIndices(ev:TpvFloat;evidx:PpvAudioInt32s;var evmu:TpvFloat);
        procedure CalcAzIndices(evidx:TpvInt32;az:TpvFloat;azidx:PpvAudioInt32s;var azmu:TpvFloat);
        procedure GetLerpedHRTFCoefs(Elevation,Azimuth:TpvFloat;var LeftCoefs,RightCoefs:TpvAudioHRTFCoefs;var LeftDelay,RightDelay:TpvInt32);
@@ -1080,6 +1081,7 @@ type PpvAudioInt32=^TpvInt32;
        property MixerSampleVolume:TpvFloat read GetMixerSampleVolume write SetMixerSampleVolume;
        property OnFillBuffer:TpvAudioOnFillBuffer read fOnFillBuffer write fOnFillBuffer;
        property OnSecondFillBuffer:TpvAudioOnFillBuffer read fOnSecondFillBuffer write fOnSecondFillBuffer;
+       property OnThirdFillBuffer:TpvAudioOnFillBuffer read fOnThirdFillBuffer write fOnThirdFillBuffer;
      end;
 
 const AudioSpeakerLayoutMono:TpvAudioSpeakerLayout=
@@ -6433,6 +6435,7 @@ begin
  GetMem(fTemporaryBuffer,BufferSamples*Channels*SizeOf(TpvAudioFloat));
  fOnFillBuffer:=nil;
  fOnSecondFillBuffer:=nil;
+ fOnThirdFillBuffer:=nil;
  SpatializationWaterLowPassCW:=Min(Max(2*sin(pi*(WATER_LOWPASS_FREQUENCY/SampleRate)),0.0),1.0);
  SpatializationWaterWaterBoostLowPassCW:=round(Min(Max(2*sin(pi*(WATER_BOOST_START_FREQUENCY/SampleRate)),0.0),1.0)*4096);
  SpatializationWaterWaterBoostHighPassCW:=round(Min(Max(2*sin(pi*(WATER_BOOST_END_FREQUENCY/SampleRate)),0.0),1.0)*4096);
@@ -6791,6 +6794,23 @@ begin
 
   if assigned(fOnSecondFillBuffer) then begin
    fOnSecondFillBuffer(fTemporaryBuffer,BufferSamples);
+   pf:=@fTemporaryBuffer[0];
+   pl:=pointer(MixingBuffer);
+   for i:=1 to BufferSamples*2 do begin
+    SampleValue:=round(pf^*32768.0);
+    if SampleValue<-524288 then begin
+     SampleValue:=-524288;
+    end else if SampleValue>524287 then begin
+     SampleValue:=524287;
+    end;
+    inc(pl^,SampleValue);
+    inc(pl);
+    inc(pf);
+   end;
+  end;
+
+  if assigned(fOnThirdFillBuffer) then begin
+   fOnThirdFillBuffer(fTemporaryBuffer,BufferSamples);
    pf:=@fTemporaryBuffer[0];
    pl:=pointer(MixingBuffer);
    for i:=1 to BufferSamples*2 do begin
