@@ -1545,6 +1545,7 @@ type EpvScene3D=class(Exception);
               fLock:TPasMPSpinLock;
               fGeneration:TpvUInt64;
               fVisible:boolean;
+              fLODMaterialIndices:TpvScene3D.TSizeIntDynamicArray;
              public
               constructor Create(const aResourceManager:TpvResourceManager;const aParent:TpvResource=nil;const aMetaResource:TpvMetaResource=nil;const aParallelLoadable:TpvResource.TParallelLoadable=TpvResource.TParallelLoadable.None); override;
               destructor Destroy; override;
@@ -1556,15 +1557,16 @@ type EpvScene3D=class(Exception);
               procedure Unload; override;
               procedure Assign(const aFrom:TMaterial);
               procedure AssignFromEmpty;
-              procedure LoadFromStream(const aStream:TStream;const aImages,aSamplers,aTextures:TpvObjectList);
+              procedure LoadFromStream(const aStream:TStream;const aImages,aSamplers,aTextures:TpvObjectList;const aHasLODs:Boolean);
               procedure PrepareSaveToStream(const aImages,aSamplers,aTextures,aMaterials:TpvObjectList);
-              procedure SaveToStream(const aStream:TStream;const aImages,aSamplers,aTextures:TpvObjectList);
+              procedure SaveToStream(const aStream:TStream;const aImages,aSamplers,aTextures:TpvObjectList;const aHasLODs:Boolean);
               procedure AssignFromGLTF(const aSourceDocument:TPasGLTF.TDocument;const aSourceMaterial:TPasGLTF.TMaterial;const aTextureMap:TTextures);
               procedure LoadHologramFromJSON(const aJSONItem:TPasJSONItem);
               procedure FillShaderData;
              public
               property Data:PData read fDataPointer;
               property ShaderData:PShaderData read fShaderDataPointer;
+              property LODMaterialIndices:TpvScene3D.TSizeIntDynamicArray read fLODMaterialIndices;
              published
               property Visible:boolean read fVisible write fVisible;
             end;
@@ -2642,6 +2644,10 @@ type EpvScene3D=class(Exception);
                      fRaytracingMask:TpvUInt8;
                      fCastingShadows:Boolean;
                      fVisible:Boolean;
+                     fLODNodeIndices:TpvScene3D.TSizeIntDynamicArray;
+                     fLODScreenCoverages:TpvFloatDynamicArray;
+                     fIsLODVariant:Boolean;
+                     fLODPrimaryNodeIndex:TpvSizeInt;
                      procedure Finish;
                     public
                      constructor Create(const aGroup:TGroup;const aIndex:TpvSizeInt=-1); reintroduce;
@@ -2650,6 +2656,8 @@ type EpvScene3D=class(Exception);
                      procedure FixUp;
                      procedure SaveToStream(const aStream:TStream);
                      procedure AssignFromGLTF(const aSourceDocument:TPasGLTF.TDocument;const aSourceNode:TPasGLTF.TNode;const aLightMap:TpvScene3D.TGroup.TLights);
+                    public
+                     property LODNodeIndices:TpvScene3D.TSizeIntDynamicArray read fLODNodeIndices;
                     published
                      property Index:TpvSizeInt read fIndex;
                      property Flags:TNodeFlags read fFlags write fFlags;
@@ -2662,6 +2670,9 @@ type EpvScene3D=class(Exception);
                      property RaytracingMask:TpvUInt8 read fRaytracingMask write fRaytracingMask;
                      property CastingShadows:Boolean read fCastingShadows write fCastingShadows;
                      property Visible:Boolean read fVisible write fVisible;
+                     property LODScreenCoverages:TpvFloatDynamicArray read fLODScreenCoverages write fLODScreenCoverages;
+                     property IsLODVariant:Boolean read fIsLODVariant write fIsLODVariant;
+                     property LODPrimaryNodeIndex:TpvSizeInt read fLODPrimaryNodeIndex write fLODPrimaryNodeIndex;
                    end;
                    { TUsedVisibleDrawNodes }
                    TUsedVisibleDrawNodes=TpvObjectGenericList<TpvScene3D.TGroup.TNode>;
@@ -2862,6 +2873,8 @@ type EpvScene3D=class(Exception);
                             fInFlightFrameRaytracingMasks:array[0..MaxInFlightFrames-1] of TpvUInt32;
                             fInFlightFrameCastingShadows:array[0..MaxInFlightFrames-1] of Boolean;
                             fInFlightFrameVisible:array[0..MaxInFlightFrames-1] of Boolean;
+                            fInFlightFrameActiveLODLevel:array[0..MaxInFlightFrames-1] of TpvInt32;
+                            fInFlightFrameScreenCoverage:array[0..MaxInFlightFrames-1] of TpvFloat;
                            public
                             constructor Create(const aGroup:TpvScene3D.TGroup;
                                                const aGroupNode:TpvScene3D.TGroup.TNode;
@@ -3537,6 +3550,7 @@ type EpvScene3D=class(Exception);
                      procedure ProcessBaseOverwrite(const aFactor:TPasGLTFFloat);
                      procedure ProcessAnimation(const aAnimationIndex:TpvSizeInt;const aAnimationTime:TpvDouble;const aFactor:TpvFloat);
                      procedure ProcessNode(const aInFlightFrameIndex:TpvSizeInt;const aNodeIndex:TpvSizeInt;const aMatrix:TpvMatrix4x4;aDirty,aMatrixDirty:boolean;const aParentVisible:boolean);
+                     function SelectNodeLODLevel(const aNode:TpvScene3D.TGroup.TNode;const aBoundingSphere:TpvSphere;out aScreenCoverage:TpvFloat):TpvInt32;
                      procedure ProcessSkins;
                      procedure ProcessBoundingBoxNodeRecursive(const aInFlightFrameIndex:TpvSizeInt;const aNodeIndex:TpvSizeInt);
                      procedure ProcessBoundingSceneBoxNodesWithManualStack(const aInFlightFrameIndex:TpvSizeInt;const aScene:TpvScene3D.TGroup.TScene);
@@ -3740,6 +3754,7 @@ type EpvScene3D=class(Exception);
               fCulling:boolean;
               fDynamicAABBTreeCulling:boolean;
               fHeadless:boolean;
+              fHasLODs:boolean;
               fOrder:TpvInt64;
               fObjects:TBaseObjects;
               fMaterialsToDuplicate:TpvScene3D.TGroup.TMaterialsToDuplicate;
@@ -3925,6 +3940,7 @@ type EpvScene3D=class(Exception);
               property Culling:boolean read fCulling write fCulling;
               property DynamicAABBTreeCulling:boolean read fDynamicAABBTreeCulling write fDynamicAABBTreeCulling;
               property Headless:boolean read fHeadless write fHeadless;
+              property HasLODs:boolean read fHasLODs;
               property Order:TpvInt64 read fOrder write fOrder;
               property Objects:TBaseObjects read fObjects;
               property Animations:TAnimations read fAnimations;
@@ -7578,7 +7594,7 @@ begin
    if assigned(BLASGroup^.fBLAS) and (BLASGroup^.fBLAS.CountGeometries>0) and assigned(BLASGroup^.fBLAS.AccelerationStructure) then begin
 
     if CountPrimitives>0 then begin
-     if fInstance.fActives[aInFlightFrameIndex] and fInstanceNode.fBoundingBoxFilled[aInFlightFrameIndex] then begin
+     if fInstance.fActives[aInFlightFrameIndex] and fInstanceNode.fBoundingBoxFilled[aInFlightFrameIndex] and fInstanceNode.fInFlightFrameVisible[aInFlightFrameIndex] then begin
       if fInstance.fUseRenderInstances then begin
        CountRenderInstances:=PerInFlightFrameRenderInstanceDynamicArray^.Count;
       end else begin
@@ -9496,6 +9512,8 @@ begin
 
  fVisible:=true;
 
+ fLODMaterialIndices.Initialize;
+
 end;
 
 destructor TpvScene3D.TMaterial.Destroy;
@@ -9648,6 +9666,7 @@ begin
   end;
  end;
  FreeAndNil(fLock);
+ fLODMaterialIndices.Finalize;
  inherited Destroy;
 end;
 
@@ -10159,9 +10178,10 @@ begin
 
 end;
 
-procedure TpvScene3D.TMaterial.LoadFromStream(const aStream:TStream;const aImages,aSamplers,aTextures:TpvObjectList);
+procedure TpvScene3D.TMaterial.LoadFromStream(const aStream:TStream;const aImages,aSamplers,aTextures:TpvObjectList;const aHasLODs:Boolean);
 var StreamIO:TpvStreamIO;
     Flags:TpvUInt32;
+    Count,LODIndex:TpvSizeInt;
 begin
 
  fVisible:=true;
@@ -10418,6 +10438,15 @@ begin
 
   fData.AnimatedTextureMask:=StreamIO.ReadUInt64;
 
+  if aHasLODs then begin
+   Count:=StreamIO.ReadInt64;
+   fLODMaterialIndices.Resize(Count);
+   for LODIndex:=0 to Count-1 do begin
+    fLODMaterialIndices.ItemArray[LODIndex]:=StreamIO.ReadInt64;
+   end;
+   fLODMaterialIndices.Finish;
+  end;
+
  finally
   FreeAndNil(StreamIO);
  end;
@@ -10519,9 +10548,10 @@ begin
 
 end;
 
-procedure TpvScene3D.TMaterial.SaveToStream(const aStream:TStream;const aImages,aSamplers,aTextures:TpvObjectList);
+procedure TpvScene3D.TMaterial.SaveToStream(const aStream:TStream;const aImages,aSamplers,aTextures:TpvObjectList;const aHasLODs:Boolean);
 var StreamIO:TpvStreamIO;
     Flags:TpvUInt32;
+    Count,LODIndex:TpvSizeInt;
 begin
 
  StreamIO:=TpvStreamIO.Create(aStream);
@@ -10787,6 +10817,14 @@ begin
   end;
 
   StreamIO.WriteUInt64(fData.AnimatedTextureMask);
+
+  if aHasLODs then begin
+   Count:=fLODMaterialIndices.Count;
+   StreamIO.WriteInt64(Count);
+   for LODIndex:=0 to Count-1 do begin
+    StreamIO.WriteInt64(fLODMaterialIndices.ItemArray[LODIndex]);
+   end;
+  end;
 
  finally
   FreeAndNil(StreamIO);
@@ -11321,6 +11359,17 @@ begin
 
   begin
    LoadHologramFromJSON(aSourceMaterial.Extensions.Properties['PASVULKAN_hologram']);
+  end;
+
+  JSONItem:=aSourceMaterial.Extensions.Properties['MSFT_lod'];
+  if assigned(JSONItem) and (JSONItem is TPasJSONItemObject) then begin
+   JSONObject:=TPasJSONItemObject(JSONItem);
+   JSONItem:=JSONObject.Properties['ids'];
+   if assigned(JSONItem) and (JSONItem is TPasJSONItemArray) then begin
+    for Index:=0 to TPasJSONItemArray(JSONItem).Count-1 do begin
+     fLODMaterialIndices.Add(TPasJSON.GetInt64(TPasJSONItemArray(JSONItem).Items[Index],-1));
+    end;
+   end;
   end;
 
  finally
@@ -17877,6 +17926,11 @@ begin
 
  fVisible:=true;
 
+ fLODNodeIndices.Initialize;
+ fLODScreenCoverages:=nil;
+ fIsLODVariant:=false;
+ fLODPrimaryNodeIndex:=-1;
+
  fDrawChoreographyBatchItemIndices.Initialize;
 
  fDrawChoreographyBatchUniqueItemIndices.Initialize;
@@ -17911,6 +17965,9 @@ begin
  fDrawChoreographyBatchItemIndices.Finalize;
 
  fDrawChoreographyBatchUniqueItemIndices.Finalize;
+
+ fLODNodeIndices.Finalize;
+ fLODScreenCoverages:=nil;
 
  inherited Destroy;
 
@@ -18038,6 +18095,24 @@ begin
    UsedJoint^.AABB:=StreamIO.ReadAABB;
   end;
   fUsedJoints.Finish;
+
+  if fGroup.fHasLODs then begin
+   Count:=StreamIO.ReadInt64;
+   fLODNodeIndices.Resize(Count);
+   for Index:=0 to Count-1 do begin
+    fLODNodeIndices.ItemArray[Index]:=StreamIO.ReadInt64;
+   end;
+   fLODNodeIndices.Finish;
+
+   Count:=StreamIO.ReadInt64;
+   SetLength(fLODScreenCoverages,Count);
+   for Index:=0 to Count-1 do begin
+    fLODScreenCoverages[Index]:=StreamIO.ReadFloat;
+   end;
+
+   fIsLODVariant:=StreamIO.ReadBoolean;
+   fLODPrimaryNodeIndex:=StreamIO.ReadInt64;
+  end;
 
  finally
   FreeAndNil(StreamIO);
@@ -18203,6 +18278,23 @@ begin
    StreamIO.WriteAABB(fUsedJoints.Items[Index].AABB);
   end;
 
+  if fGroup.fHasLODs then begin
+   Count:=fLODNodeIndices.Count;
+   StreamIO.WriteInt64(Count);
+   for Index:=0 to Count-1 do begin
+    StreamIO.WriteInt64(fLODNodeIndices[Index]);
+   end;
+
+   Count:=Length(fLODScreenCoverages);
+   StreamIO.WriteInt64(Count);
+   for Index:=0 to Count-1 do begin
+    StreamIO.WriteFloat(fLODScreenCoverages[Index]);
+   end;
+
+   StreamIO.WriteBoolean(fIsLODVariant);
+   StreamIO.WriteInt64(fLODPrimaryNodeIndex);
+  end;
+
  finally
   FreeAndNil(StreamIO);
  end;
@@ -18264,6 +18356,12 @@ var WeightIndex{,ChildrenIndex}:TpvSizeInt;
     KHRLightsPunctualObject:TPasJSONItemObject;
     KHRNodeVisibilityItem:TPasJSONItem;
     KHRNodeVisibilityObject:TPasJSONItemObject;
+    MSFTLODItem:TPasJSONItem;
+    MSFTLODObject:TPasJSONItemObject;
+    MSFTLODIdsArray:TPasJSONItemArray;
+    MSFTScreenCoverageItem:TPasJSONItem;
+    MSFTScreenCoverageArray:TPasJSONItemArray;
+    LODIndex:TpvSizeInt;
 begin
 
  fName:=aSourceNode.Name;
@@ -18300,8 +18398,29 @@ begin
    KHRNodeVisibilityObject:=TPasJSONItemObject(KHRNodeVisibilityItem);
    fVisible:=TPasJSON.GetBoolean(KHRNodeVisibilityObject.Properties['visible'],true);
   end;
+  MSFTLODItem:=ExtensionObject.Properties['MSFT_lod'];
+  if assigned(MSFTLODItem) and (MSFTLODItem is TPasJSONItemObject) then begin
+   MSFTLODObject:=TPasJSONItemObject(MSFTLODItem);
+   MSFTLODIdsArray:=TPasJSONItemArray(MSFTLODObject.Properties['ids']);
+   if assigned(MSFTLODIdsArray) and (MSFTLODIdsArray is TPasJSONItemArray) then begin
+    for LODIndex:=0 to MSFTLODIdsArray.Count-1 do begin
+     fLODNodeIndices.Add(TPasJSON.GetInt64(MSFTLODIdsArray.Items[LODIndex],-1));
+    end;
+   end;
+  end;
  end else begin
   fLightIndex:=-1;
+ end;
+
+ if (fLODNodeIndices.Count>0) and assigned(aSourceNode.Extras) and (aSourceNode.Extras is TPasJSONItemObject) then begin
+  MSFTScreenCoverageItem:=TPasJSONItemObject(aSourceNode.Extras).Properties['MSFT_screencoverage'];
+  if assigned(MSFTScreenCoverageItem) and (MSFTScreenCoverageItem is TPasJSONItemArray) then begin
+   MSFTScreenCoverageArray:=TPasJSONItemArray(MSFTScreenCoverageItem);
+   SetLength(fLODScreenCoverages,MSFTScreenCoverageArray.Count);
+   for LODIndex:=0 to MSFTScreenCoverageArray.Count-1 do begin
+    fLODScreenCoverages[LODIndex]:=TPasJSON.GetNumber(MSFTScreenCoverageArray.Items[LODIndex],0.0);
+   end;
+  end;
  end;
 
  fMatrix:=TpvMatrix4x4(pointer(@aSourceNode.Matrix)^);
@@ -18779,6 +18898,8 @@ begin
  fCulling:=true;
 
  fDynamicAABBTreeCulling:=false;
+
+ fHasLODs:=false;
 
  fUsedVisibleDrawNodes:=TUsedVisibleDrawNodes.Create;
  fUsedVisibleDrawNodes.OwnsObjects:=false;
@@ -19783,7 +19904,7 @@ var First:boolean;
      BoundingBox:TpvAABB;
  begin
   Node:=fNodes[aNodeIndex];
-  if not Node.fVisible then begin
+  if Node.fIsLODVariant or not Node.fVisible then begin
    exit;
   end;
   Matrix:=((TpvMatrix4x4.CreateScale(Node.fScale)*
@@ -19877,6 +19998,24 @@ begin
    end;
   finally
    NodeStack.Finalize;
+  end;
+  // Also collect LOD variant nodes that have valid meshes (they were removed from tree)
+  for Node in fNodes do begin
+   if Node.fIsLODVariant then begin
+    Mesh:=Node.fMesh;
+    if (not NodeHashMap[Node]) and assigned(Mesh) and (Node.fNodeMeshInstanceIndex>=0) then begin
+     for PrimitiveIndex:=0 to Mesh.fPrimitives.Count-1 do begin
+      Primitive:=Mesh.fPrimitives[PrimitiveIndex];
+      if (Primitive.fCountIndices>0) and
+         assigned(Primitive.fMaterial) and
+         (Node.fNodeMeshInstanceIndex<Primitive.fNodeMeshPrimitiveInstances.Count) then begin
+       NodeHashMap[Node]:=true;
+       fUsedVisibleDrawNodes.Add(Node);
+       break;
+      end;
+     end;
+    end;
+   end;
   end;
  finally
   FreeAndNil(NodeHashMap);
@@ -20978,6 +21117,7 @@ begin
         fCulling:=(Flags and 1)<>0;
         fDynamicAABBTreeCulling:=(Flags and 2)<>0;
         fCastingShadows:=(Flags and 4)<>0;
+        fHasLODs:=(Flags and 8)<>0;
 
         // Read morph target count
         fMorphTargetCount:=StreamIO.ReadInt64;
@@ -21153,7 +21293,7 @@ begin
          for Index:=0 to Count-1 do begin
           Material:=TpvScene3D.TMaterial.Create(ResourceManager,fSceneInstance);
           try
-           Material.LoadFromStream(aStream,CollectedImages,CollectedSamplers,CollectedTextures);
+           Material.LoadFromStream(aStream,CollectedImages,CollectedSamplers,CollectedTextures,fHasLODs);
            fSceneInstance.fMaterialListLock.Acquire;
            try
             OtherIndex:=AddMaterial(Material,false,false);
@@ -21575,6 +21715,9 @@ begin
       if fCastingShadows then begin
        Flags:=Flags or 4;
       end;
+      if fHasLODs then begin
+       Flags:=Flags or 8;
+      end;
       StreamIO.WriteUInt32(Flags);
 
       // Write morph target count
@@ -21681,7 +21824,7 @@ begin
       Count:=CollectedMaterials.Count;
       StreamIO.WriteInt64(Count);
       for Index:=0 to Count-1 do begin
-       TpvScene3D.TMaterial(CollectedMaterials[Index]).SaveToStream(aStream,CollectedImages,CollectedSamplers,CollectedTextures);
+       TpvScene3D.TMaterial(CollectedMaterials[Index]).SaveToStream(aStream,CollectedImages,CollectedSamplers,CollectedTextures,fHasLODs);
       end;
 
       // Write lights
@@ -22113,6 +22256,53 @@ var POCACodeString:TpvUTF8String;
    end;
   end;
  end;
+ procedure MarkLODVariants;
+ var Index,ChildrenIndex,NodeIndex:TpvSizeInt;
+     Node:TpvScene3D.TGroup.TNode;
+     Scene:TpvScene3D.TGroup.TScene;
+ begin
+  fHasLODs:=false;
+  for Index:=0 to fNodes.Count-1 do begin
+   if fNodes[Index].fLODNodeIndices.Count>0 then begin
+    fHasLODs:=true;
+    break;
+   end;
+  end;
+  if not fHasLODs then begin
+   for Index:=0 to fMaterials.Count-1 do begin
+    if TpvScene3D.TMaterial(fMaterials[Index]).fLODMaterialIndices.Count>0 then begin
+     fHasLODs:=true;
+     break;
+    end;
+   end;
+  end;
+  for Index:=0 to fNodes.Count-1 do begin
+   Node:=fNodes[Index];
+   for ChildrenIndex:=0 to Node.fLODNodeIndices.Count-1 do begin
+    NodeIndex:=Node.fLODNodeIndices.Items[ChildrenIndex];
+    if (NodeIndex>=0) and (NodeIndex<fNodes.Count) then begin
+     fNodes[NodeIndex].fIsLODVariant:=true;
+     fNodes[NodeIndex].fLODPrimaryNodeIndex:=Index;
+    end;
+   end;
+  end;
+  for Index:=0 to fNodes.Count-1 do begin
+   Node:=fNodes[Index];
+   for ChildrenIndex:=Node.fChildren.Count-1 downto 0 do begin
+    if Node.fChildren[ChildrenIndex].fIsLODVariant then begin
+     Node.fChildren.Delete(ChildrenIndex);
+    end;
+   end;
+  end;
+  for Index:=0 to fScenes.Count-1 do begin
+   Scene:=fScenes[Index];
+   for ChildrenIndex:=Scene.fNodes.Count-1 downto 0 do begin
+    if Scene.fNodes[ChildrenIndex].fIsLODVariant then begin
+     Scene.fNodes.Delete(ChildrenIndex);
+    end;
+   end;
+  end;
+ end;
 var StartTime,EndTime,
     ImagesStartTime,ImagesEndTime,
     AnimationsStartTime,AnimationsEndTime,
@@ -22152,6 +22342,8 @@ begin
   ProcessNodes;
 
   ProcessScenes;
+
+  MarkLODVariants;
 
   AnimationsStartTime:=pvApplication.HighResolutionTimer.GetTime;
   ProcessAnimations;
@@ -24695,7 +24887,9 @@ begin
     InstanceNode.fPotentiallyVisibleSetNodeIndices[OtherIndex]:=TpvScene3D.TPotentiallyVisibleSet.NoNodeIndex;
     InstanceNode.fCacheVerticesGenerations[OtherIndex]:=0;
     InstanceNode.fCacheMatrixGenerations[OtherIndex]:=0;
-    InstanceNode.fInFlightFrameVisible[OtherIndex]:=true;
+    InstanceNode.fInFlightFrameVisible[OtherIndex]:=not Node.fIsLODVariant;
+    InstanceNode.fInFlightFrameActiveLODLevel[OtherIndex]:=0;
+    InstanceNode.fInFlightFrameScreenCoverage[OtherIndex]:=1.0;
    end;
    InstanceNode.fCacheVerticesGeneration:=1;
    InstanceNode.fCacheVerticesDirtyCounter:=1;
@@ -27932,6 +28126,9 @@ var Index,OtherIndex,RotationCounter:TpvSizeInt;
     OwnVisible,EffectiveVisible:boolean;
     Light:TpvScene3D.TLight;
     InstanceLight:TpvScene3D.TGroup.TInstance.TLight;
+    LODLevel:TpvInt32;
+    LODNodeIndex:TpvSizeInt;
+    PrevFrameIndex:TpvSizeInt;
  procedure AddRotation(const aRotation:TpvQuaternion;const aFactor:TpvDouble;const aAdditive:Boolean);
  begin
   if not IsZero(aFactor) then begin
@@ -28227,8 +28424,83 @@ begin
   InstanceNode.NewCacheMatrixGeneration;
  end;
  InstanceNode.fCacheMatrixGenerations[aInFlightFrameIndex]:=InstanceNode.fCacheMatrixGeneration;
+ if fGroup.fHasLODs and (aInFlightFrameIndex>=0) and EffectiveVisible and ((Node.fLODNodeIndices.Count>0) or assigned(Node.fMesh)) then begin
+  if aInFlightFrameIndex>0 then begin
+   PrevFrameIndex:=aInFlightFrameIndex-1;
+  end else begin
+   PrevFrameIndex:=-1;
+  end;
+  if InstanceNode.fBoundingBoxFilled[PrevFrameIndex] then begin
+   LODLevel:=SelectNodeLODLevel(Node,InstanceNode.fBoundingSpheres[PrevFrameIndex],InstanceNode.fInFlightFrameScreenCoverage[aInFlightFrameIndex]);
+  end else begin
+   LODLevel:=0;
+   InstanceNode.fInFlightFrameScreenCoverage[aInFlightFrameIndex]:=1.0;
+  end;
+  InstanceNode.fInFlightFrameActiveLODLevel[aInFlightFrameIndex]:=LODLevel;
+  if (LODLevel>0) and (Node.fLODNodeIndices.Count>0) then begin
+   InstanceNode.fInFlightFrameVisible[aInFlightFrameIndex]:=false;
+   LODNodeIndex:=Node.fLODNodeIndices[LODLevel-1];
+   if (LODNodeIndex>=0) and (LODNodeIndex<fGroup.fNodes.Count) then begin
+    ProcessNode(aInFlightFrameIndex,LODNodeIndex,Matrix,Dirty,MatrixDirty,EffectiveVisible);
+   end;
+  end;
+ end else if aInFlightFrameIndex>=0 then begin
+  InstanceNode.fInFlightFrameActiveLODLevel[aInFlightFrameIndex]:=0;
+  InstanceNode.fInFlightFrameScreenCoverage[aInFlightFrameIndex]:=1.0;
+ end;
  for Index:=0 to Node.Children.Count-1 do begin
   ProcessNode(aInFlightFrameIndex,Node.Children[Index].Index,Matrix,Dirty,MatrixDirty,EffectiveVisible);
+ end;
+end;
+
+function TpvScene3D.TGroup.TInstance.SelectNodeLODLevel(const aNode:TpvScene3D.TGroup.TNode;const aBoundingSphere:TpvSphere;out aScreenCoverage:TpvFloat):TpvInt32;
+var ViewCenter:TpvVector3;
+    Distance,ProjectedRadius:TpvFloat;
+    ViewMatrix,ProjectionMatrix:TpvMatrix4x4;
+    LODIndex:TpvSizeInt;
+begin
+ if fGroup.HasLODs and assigned(fGroup.fSceneInstance.fUpdateCulling) then begin
+  result:=0;
+  aScreenCoverage:=1.0;
+  ViewMatrix:=TpvMatrix4x4(fGroup.fSceneInstance.fUpdateCulling.fViewMatrix);
+  ProjectionMatrix:=TpvMatrix4x4(fGroup.fSceneInstance.fUpdateCulling.fProjectionMatrix);
+  ViewCenter:=(ViewMatrix*fWorkModelMatrix).MulHomogen(aBoundingSphere.Center);
+  Distance:=Abs(ViewCenter.z);
+  if Distance>1.0e-6 then begin
+   ProjectedRadius:=aBoundingSphere.Radius*ProjectionMatrix.RawComponents[1,1]/Distance;
+   aScreenCoverage:=ProjectedRadius*ProjectedRadius*PI*0.25;
+  end;
+  if aNode.fLODNodeIndices.Count>0 then begin
+   if Length(aNode.fLODScreenCoverages)>0 then begin
+    for LODIndex:=0 to Length(aNode.fLODScreenCoverages)-1 do begin
+     if aScreenCoverage>=aNode.fLODScreenCoverages[LODIndex] then begin
+      result:=LODIndex;
+      break;
+     end;
+     result:=LODIndex+1;
+    end;
+   end else begin
+    for LODIndex:=0 to aNode.fLODNodeIndices.Count do begin
+     if LODIndex=0 then begin
+      if aScreenCoverage>=0.5 then begin
+       result:=0;
+       break;
+      end;
+     end else begin
+      if aScreenCoverage>=(0.5/TpvFloat(TpvSizeInt(1) shl LODIndex)) then begin
+       result:=LODIndex;
+       break;
+      end;
+      result:=LODIndex+1;
+     end;
+    end;
+   end;
+   if result>aNode.fLODNodeIndices.Count then begin
+    result:=aNode.fLODNodeIndices.Count;
+   end;
+  end;
+ end else begin
+  result:=0;
  end;
 end;
 
@@ -31341,6 +31613,8 @@ var ViewIndex,FrustumIndex,SkipListItemIndex,SkipListItemCount,DrawChoreographyB
     SkipListItem:TpvScene3D.TGroup.TScene.PSkipListItem;
     DrawChoreographyBatchItemIndices:PSizeIntDynamicArray;
     DrawChoreographyBatchItem:TpvScene3D.TDrawChoreographyBatchItem;
+    EffectiveMaterial:TpvScene3D.TMaterial;
+    MaterialLODLevel:TpvInt32;
 begin
 
  FirstInstance:=0;
@@ -31511,9 +31785,19 @@ begin
            for DrawChoreographyBatchItemIndex:=0 to DrawChoreographyBatchItemIndices^.Count-1 do begin
             DrawChoreographyBatchItemElementIndex:=DrawChoreographyBatchItemIndices^.Items[DrawChoreographyBatchItemIndex];
             DrawChoreographyBatchItem:=fDrawChoreographyBatchItems[DrawChoreographyBatchItemElementIndex];
-            if DrawChoreographyBatchItem.fMaterial.fVisible and
+            EffectiveMaterial:=DrawChoreographyBatchItem.fMaterial;
+            if fGroup.fHasLODs and (EffectiveMaterial.fLODMaterialIndices.Count>0) then begin
+             MaterialLODLevel:=InstanceNode.fInFlightFrameActiveLODLevel[aInFlightFrameIndex];
+             if MaterialLODLevel>EffectiveMaterial.fLODMaterialIndices.Count then begin
+              MaterialLODLevel:=EffectiveMaterial.fLODMaterialIndices.Count;
+             end;
+             if (MaterialLODLevel>0) and (EffectiveMaterial.fLODMaterialIndices.ItemArray[MaterialLODLevel-1]>=0) and (EffectiveMaterial.fLODMaterialIndices.ItemArray[MaterialLODLevel-1]<fGroup.fMaterials.Count) then begin
+              EffectiveMaterial:=fGroup.fMaterials[EffectiveMaterial.fLODMaterialIndices.ItemArray[MaterialLODLevel-1]];
+             end;
+            end;
+            if EffectiveMaterial.fVisible and
                (DrawChoreographyBatchItem.fAlphaMode in aMaterialAlphaModes) and
-               ((not aShadowPass) or (aShadowPass and DrawChoreographyBatchItem.fMaterial.fData.CastingShadows and InstanceNode.fInFlightFrameCastingShadows[aInFlightFrameIndex])) and
+               ((not aShadowPass) or (aShadowPass and EffectiveMaterial.fData.CastingShadows and InstanceNode.fInFlightFrameCastingShadows[aInFlightFrameIndex])) and
               (DrawChoreographyBatchItem.fCountIndices>0) then begin
              DrawChoreographyBatchItemMaterialAlphaModeBuckets^[DrawChoreographyBatchItem.fAlphaMode,
                                                                 DrawChoreographyBatchItem.fPrimitiveTopology,
@@ -31622,9 +31906,19 @@ begin
       for DrawChoreographyBatchItemIndex:=0 to DrawChoreographyBatchItemIndices^.Count-1 do begin
        DrawChoreographyBatchItemElementIndex:=DrawChoreographyBatchItemIndices^.Items[DrawChoreographyBatchItemIndex];
        DrawChoreographyBatchItem:=fDrawChoreographyBatchItems[DrawChoreographyBatchItemElementIndex];
-       if DrawChoreographyBatchItem.fMaterial.fVisible and
+       EffectiveMaterial:=DrawChoreographyBatchItem.fMaterial;
+       if fGroup.fHasLODs and (EffectiveMaterial.fLODMaterialIndices.Count>0) then begin
+        MaterialLODLevel:=InstanceNode.fInFlightFrameActiveLODLevel[aInFlightFrameIndex];
+        if MaterialLODLevel>EffectiveMaterial.fLODMaterialIndices.Count then begin
+         MaterialLODLevel:=EffectiveMaterial.fLODMaterialIndices.Count;
+        end;
+        if (MaterialLODLevel>0) and (EffectiveMaterial.fLODMaterialIndices.ItemArray[MaterialLODLevel-1]>=0) and (EffectiveMaterial.fLODMaterialIndices.ItemArray[MaterialLODLevel-1]<fGroup.fMaterials.Count) then begin
+         EffectiveMaterial:=fGroup.fMaterials[EffectiveMaterial.fLODMaterialIndices.ItemArray[MaterialLODLevel-1]];
+        end;
+       end;
+       if EffectiveMaterial.fVisible and
           (DrawChoreographyBatchItem.fAlphaMode in aMaterialAlphaModes) and
-          ((not aShadowPass) or (aShadowPass and DrawChoreographyBatchItem.fMaterial.fData.CastingShadows and InstanceNode.fInFlightFrameCastingShadows[aInFlightFrameIndex])) and
+          ((not aShadowPass) or (aShadowPass and EffectiveMaterial.fData.CastingShadows and InstanceNode.fInFlightFrameCastingShadows[aInFlightFrameIndex])) and
          (DrawChoreographyBatchItem.fCountIndices>0) then begin
         DrawChoreographyBatchItemMaterialAlphaModeBuckets^[DrawChoreographyBatchItem.fAlphaMode,
                                                            DrawChoreographyBatchItem.fPrimitiveTopology,
