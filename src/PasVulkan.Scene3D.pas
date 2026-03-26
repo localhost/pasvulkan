@@ -2247,6 +2247,7 @@ type EpvScene3D=class(Exception);
                                    PointerMaterialHologramGlowSpeed,
                                    PointerMaterialHologramGlowMin,
                                    PointerMaterialHologramGlowMax,
+                                   PointerNodeExtensionsKHRNodeVisibilityVisible,
                                    PointerTextureOffset,
                                    PointerTextureRotation,
                                    PointerTextureScale
@@ -2598,7 +2599,8 @@ type EpvScene3D=class(Exception);
                            (
                             TransformAnimated,
                             SkinAnimated,
-                            WeightsAnimated
+                            WeightsAnimated,
+                            VisibilityAnimated
                            );
                           PNodeFlag=^TNodeFlag;
                           TNodeFlags=set of TNodeFlag;
@@ -2639,6 +2641,7 @@ type EpvScene3D=class(Exception);
                      fUsedJoints:TpvScene3D.TGroup.TNode.TUsedJoints;
                      fRaytracingMask:TpvUInt8;
                      fCastingShadows:Boolean;
+                     fVisible:Boolean;
                      procedure Finish;
                     public
                      constructor Create(const aGroup:TGroup;const aIndex:TpvSizeInt=-1); reintroduce;
@@ -2658,6 +2661,7 @@ type EpvScene3D=class(Exception);
                      property Light:TpvScene3D.TGroup.TLight read fLight write fLight;
                      property RaytracingMask:TpvUInt8 read fRaytracingMask write fRaytracingMask;
                      property CastingShadows:Boolean read fCastingShadows write fCastingShadows;
+                     property Visible:Boolean read fVisible write fVisible;
                    end;
                    { TUsedVisibleDrawNodes }
                    TUsedVisibleDrawNodes=TpvObjectGenericList<TpvScene3D.TGroup.TNode>;
@@ -2799,6 +2803,7 @@ type EpvScene3D=class(Exception);
                                    Rotation,
                                    Scale,
                                    Weights,
+                                   Visibility,
                                    Pointer_
                                   );
                                  TNodeOverwriteFlags=set of TNodeOverwriteFlag;
@@ -2809,6 +2814,7 @@ type EpvScene3D=class(Exception);
                                    Rotation:TpvQuaternion;
                                    Scale:TpvVector3;
                                    Weights:TpvFloatDynamicArray;
+                                   Visible:Boolean;
                                    Factor:TpvFloat;
                                  end;
                                  PNodeOverwrite=^TNodeOverwrite;
@@ -2852,8 +2858,10 @@ type EpvScene3D=class(Exception);
                             fRaytracingGroupInstanceNodeID:TpvUInt64;
                             fRaytracingMask:TpvUInt8;
                             fCastingShadows:Boolean;
+                            fVisible:Boolean;
                             fInFlightFrameRaytracingMasks:array[0..MaxInFlightFrames-1] of TpvUInt32;
                             fInFlightFrameCastingShadows:array[0..MaxInFlightFrames-1] of Boolean;
+                            fInFlightFrameVisible:array[0..MaxInFlightFrames-1] of Boolean;
                            public
                             constructor Create(const aGroup:TpvScene3D.TGroup;
                                                const aGroupNode:TpvScene3D.TGroup.TNode;
@@ -2868,6 +2876,7 @@ type EpvScene3D=class(Exception);
                             property GroupInstance:TpvScene3D.TGroup.TInstance read fGroupInstance;
                             property RaytracingMask:TpvUInt8 read fRaytracingMask write fRaytracingMask;
                             property CastingShadows:Boolean read fCastingShadows write fCastingShadows;
+                            property Visible:Boolean read fVisible write fVisible;
                             property BoundingSphereIndex:TpvUInt32 read fBoundingSphereIndex write fBoundingSphereIndex;
                             property BoundingSphereID:TpvID read fBoundingSphereID write fBoundingSphereID;
                            public
@@ -3527,7 +3536,7 @@ type EpvScene3D=class(Exception);
                      procedure ResetNodes(const aResetOverwrites:Boolean);
                      procedure ProcessBaseOverwrite(const aFactor:TPasGLTFFloat);
                      procedure ProcessAnimation(const aAnimationIndex:TpvSizeInt;const aAnimationTime:TpvDouble;const aFactor:TpvFloat);
-                     procedure ProcessNode(const aInFlightFrameIndex:TpvSizeInt;const aNodeIndex:TpvSizeInt;const aMatrix:TpvMatrix4x4;aDirty,aMatrixDirty:boolean);
+                     procedure ProcessNode(const aInFlightFrameIndex:TpvSizeInt;const aNodeIndex:TpvSizeInt;const aMatrix:TpvMatrix4x4;aDirty,aMatrixDirty:boolean;const aParentVisible:boolean);
                      procedure ProcessSkins;
                      procedure ProcessBoundingBoxNodeRecursive(const aInFlightFrameIndex:TpvSizeInt;const aNodeIndex:TpvSizeInt);
                      procedure ProcessBoundingSceneBoxNodesWithManualStack(const aInFlightFrameIndex:TpvSizeInt;const aScene:TpvScene3D.TGroup.TScene);
@@ -14071,6 +14080,11 @@ begin
        fTarget:=TAnimation.TChannel.TTarget.PointerNodeTranslation;
       end else if TargetPointerStrings[2]='weights' then begin
        fTarget:=TAnimation.TChannel.TTarget.PointerNodeWeights;
+      end else if (TargetPointerStrings[2]='extensions') and
+                  (length(TargetPointerStrings)>4) and
+                  (TargetPointerStrings[3]='KHR_node_visibility') and
+                  (TargetPointerStrings[4]='visible') then begin
+       fTarget:=TAnimation.TChannel.TTarget.PointerNodeExtensionsKHRNodeVisibilityVisible;
       end;
      end;
     end else if TargetPointerStrings[0]='meshes' then begin
@@ -17861,6 +17875,8 @@ begin
 
  fCastingShadows:=true;
 
+ fVisible:=true;
+
  fDrawChoreographyBatchItemIndices.Initialize;
 
  fDrawChoreographyBatchUniqueItemIndices.Initialize;
@@ -17926,6 +17942,7 @@ begin
    Include(fFlags,TpvScene3D.TGroup.TNode.TNodeFlag.WeightsAnimated);
   end;
   fCastingShadows:=(Flags and 8)<>0;
+  fVisible:=(Flags and 16)=0;
 
   Count:=StreamIO.ReadInt64;
   fUsedByScenesListIndices.Clear;
@@ -18095,6 +18112,9 @@ begin
   if fCastingShadows then begin
    Flags:=Flags or 8;
   end;
+  if not fVisible then begin
+   Flags:=Flags or 16;
+  end;
   StreamIO.WriteUInt32(Flags);
 
   Count:=fUsedByScenesList.Count;
@@ -18242,6 +18262,8 @@ var WeightIndex{,ChildrenIndex}:TpvSizeInt;
     ExtensionObject:TPasJSONItemObject;
     KHRLightsPunctualItem:TPasJSONItem;
     KHRLightsPunctualObject:TPasJSONItemObject;
+    KHRNodeVisibilityItem:TPasJSONItem;
+    KHRNodeVisibilityObject:TPasJSONItemObject;
 begin
 
  fName:=aSourceNode.Name;
@@ -18272,6 +18294,11 @@ begin
    fLightIndex:=TPasJSON.GetInt64(KHRLightsPunctualObject.Properties['light'],-1);
   end else begin
    fLightIndex:=-1;
+  end;
+  KHRNodeVisibilityItem:=ExtensionObject.Properties['KHR_node_visibility'];
+  if assigned(KHRNodeVisibilityItem) and (KHRNodeVisibilityItem is TPasJSONItemObject) then begin
+   KHRNodeVisibilityObject:=TPasJSONItemObject(KHRNodeVisibilityItem);
+   fVisible:=TPasJSON.GetBoolean(KHRNodeVisibilityObject.Properties['visible'],true);
   end;
  end else begin
   fLightIndex:=-1;
@@ -19652,6 +19679,11 @@ begin
       Include(fNodes[AnimationChannel.fTargetIndex].fFlags,TpvScene3D.TGroup.TNode.TNodeFlag.WeightsAnimated);
      end;
     end;
+    TpvScene3D.TGroup.TAnimation.TChannel.TTarget.PointerNodeExtensionsKHRNodeVisibilityVisible:begin
+     if (AnimationChannel.fTargetIndex>=0) and (AnimationChannel.fTargetIndex<fNodes.Count) then begin
+      Include(fNodes[AnimationChannel.fTargetIndex].fFlags,TpvScene3D.TGroup.TNode.TNodeFlag.VisibilityAnimated);
+     end;
+    end;
     else begin
     end;
    end;
@@ -19751,6 +19783,9 @@ var First:boolean;
      BoundingBox:TpvAABB;
  begin
   Node:=fNodes[aNodeIndex];
+  if not Node.fVisible then begin
+   exit;
+  end;
   Matrix:=((TpvMatrix4x4.CreateScale(Node.fScale)*
             (TpvMatrix4x4.CreateFromQuaternion(Node.fRotation)*
              TpvMatrix4x4.CreateTranslation(Node.fTranslation)))*Node.fMatrix)*aMatrix;
@@ -24660,6 +24695,7 @@ begin
     InstanceNode.fPotentiallyVisibleSetNodeIndices[OtherIndex]:=TpvScene3D.TPotentiallyVisibleSet.NoNodeIndex;
     InstanceNode.fCacheVerticesGenerations[OtherIndex]:=0;
     InstanceNode.fCacheMatrixGenerations[OtherIndex]:=0;
+    InstanceNode.fInFlightFrameVisible[OtherIndex]:=true;
    end;
    InstanceNode.fCacheVerticesGeneration:=1;
    InstanceNode.fCacheVerticesDirtyCounter:=1;
@@ -24668,6 +24704,7 @@ begin
    InstanceNode.fRaytracingGroupInstanceNodeID:=0;
    InstanceNode.fRaytracingMask:=$ff;
    InstanceNode.fCastingShadows:=true;
+   InstanceNode.fVisible:=true;
    if assigned(Node.fLight) then begin
     if (CountLightNodes+1)>Length(fLightNodes) then begin
      SetLength(fLightNodes,(CountLightNodes+1)+((CountLightNodes+2) shr 1));
@@ -26632,7 +26669,8 @@ begin
      TpvScene3D.TGroup.TAnimation.TChannel.TTarget.PointerNodeTranslation,
      TpvScene3D.TGroup.TAnimation.TChannel.TTarget.PointerNodeRotation,
      TpvScene3D.TGroup.TAnimation.TChannel.TTarget.PointerNodeScale,
-     TpvScene3D.TGroup.TAnimation.TChannel.TTarget.PointerNodeWeights:begin
+     TpvScene3D.TGroup.TAnimation.TChannel.TTarget.PointerNodeWeights,
+     TpvScene3D.TGroup.TAnimation.TChannel.TTarget.PointerNodeExtensionsKHRNodeVisibilityVisible:begin
 
       if (AnimationChannel.fTargetIndex>=0) and (AnimationChannel.fTargetIndex<fNodes.Count) then begin
 
@@ -26710,6 +26748,11 @@ begin
            TpvScene3D.TGroup.TAnimation.TChannel.TTarget.Weights,
            TpvScene3D.TGroup.TAnimation.TChannel.TTarget.PointerNodeWeights:begin
             ProcessWeights(Node,NodeOverwrite,AnimationChannel,TimeIndices[0],TimeIndices[1],KeyDelta,Factor);
+           end;
+           TpvScene3D.TGroup.TAnimation.TChannel.TTarget.PointerNodeExtensionsKHRNodeVisibilityVisible:begin
+            ProcessScalar(Scalar,AnimationChannel,TimeIndices[0],TimeIndices[1],KeyDelta,Factor);
+            Include(NodeOverwrite^.Flags,TpvScene3D.TGroup.TInstance.TNode.TNodeOverwriteFlag.Visibility);
+            NodeOverwrite^.Visible:=Scalar>=0.5;
            end;
            else begin
            end;
@@ -27356,7 +27399,8 @@ begin
      TpvScene3D.TGroup.TAnimation.TChannel.TTarget.PointerNodeTranslation,
      TpvScene3D.TGroup.TAnimation.TChannel.TTarget.PointerNodeRotation,
      TpvScene3D.TGroup.TAnimation.TChannel.TTarget.PointerNodeScale,
-     TpvScene3D.TGroup.TAnimation.TChannel.TTarget.PointerNodeWeights:begin
+     TpvScene3D.TGroup.TAnimation.TChannel.TTarget.PointerNodeWeights,
+     TpvScene3D.TGroup.TAnimation.TChannel.TTarget.PointerNodeExtensionsKHRNodeVisibilityVisible:begin
       if (AnimationDefaultChannel.fTargetIndex>=0) and (AnimationDefaultChannel.fTargetIndex<fNodes.Count) then begin
        Node:=fNodes.RawItems[AnimationDefaultChannel.fTargetIndex];
        NodeOverwrite:=nil;
@@ -27409,6 +27453,9 @@ begin
            TpvScene3D.TGroup.TAnimation.TChannel.TTarget.PointerNodeWeights:begin
             NodeOverwrite^.Flags:=NodeOverwrite^.Flags+[TpvScene3D.TGroup.TInstance.TNode.TNodeOverwriteFlag.DefaultWeights,
                                                         TpvScene3D.TGroup.TInstance.TNode.TNodeOverwriteFlag.Weights];
+           end;
+           TpvScene3D.TGroup.TAnimation.TChannel.TTarget.PointerNodeExtensionsKHRNodeVisibilityVisible:begin
+            NodeOverwrite^.Flags:=NodeOverwrite^.Flags+[TpvScene3D.TGroup.TInstance.TNode.TNodeOverwriteFlag.Visibility];
            end;
            else begin
            end;
@@ -27868,7 +27915,7 @@ begin
 
 end;
 
-procedure TpvScene3D.TGroup.TInstance.ProcessNode(const aInFlightFrameIndex:TpvSizeInt;const aNodeIndex:TpvSizeInt;const aMatrix:TpvMatrix4x4;aDirty,aMatrixDirty:boolean);
+procedure TpvScene3D.TGroup.TInstance.ProcessNode(const aInFlightFrameIndex:TpvSizeInt;const aNodeIndex:TpvSizeInt;const aMatrix:TpvMatrix4x4;aDirty,aMatrixDirty:boolean;const aParentVisible:boolean);
 var Index,OtherIndex,RotationCounter:TpvSizeInt;
     Matrix:TpvMatrix4x4;
     LightMatrix:TpvMatrix4x4D;
@@ -27882,6 +27929,7 @@ var Index,OtherIndex,RotationCounter:TpvSizeInt;
     WeightsFactorSum:TpvDouble;
     Overwrite:TpvScene3D.TGroup.TInstance.TNode.PNodeOverwrite;
     FirstWeights,SkinUsed,Dirty,MatrixDirty,Additive,HasAdditiveRotation:boolean;
+    OwnVisible,EffectiveVisible:boolean;
     Light:TpvScene3D.TLight;
     InstanceLight:TpvScene3D.TGroup.TInstance.TLight;
  procedure AddRotation(const aRotation:TpvQuaternion;const aFactor:TpvDouble;const aAdditive:Boolean);
@@ -28094,8 +28142,21 @@ begin
   end;
  end;
  Dirty:=fUpdateDynamic and (Dirty or (assigned(Node.fSkin) or (Node.fWeights.Count>0)));
+ OwnVisible:=Node.fVisible;
+ if (InstanceNode.fCountOverwrites>0) then begin
+  for OtherIndex:=0 to InstanceNode.fCountOverwrites-1 do begin
+   Overwrite:=@InstanceNode.fOverwrites[OtherIndex];
+   if TpvScene3D.TGroup.TInstance.TNode.TNodeOverwriteFlag.Visibility in Overwrite^.Flags then begin
+    OwnVisible:=Overwrite^.Visible;
+   end;
+  end;
+ end;
+ EffectiveVisible:=aParentVisible and OwnVisible;
  if aInFlightFrameIndex>=0 then begin
-  if assigned(Node.fLight) then begin
+  InstanceNode.fInFlightFrameVisible[aInFlightFrameIndex]:=EffectiveVisible;
+ end;
+ if aInFlightFrameIndex>=0 then begin
+  if EffectiveVisible and assigned(Node.fLight) then begin
    LightMatrix:=Matrix*fWorkModelMatrix;
    InstanceLight:=fLights[Node.fLight.fIndex];
    if assigned(InstanceNode.fLight) then begin
@@ -28167,7 +28228,7 @@ begin
  end;
  InstanceNode.fCacheMatrixGenerations[aInFlightFrameIndex]:=InstanceNode.fCacheMatrixGeneration;
  for Index:=0 to Node.Children.Count-1 do begin
-  ProcessNode(aInFlightFrameIndex,Node.Children[Index].Index,Matrix,Dirty,MatrixDirty);
+  ProcessNode(aInFlightFrameIndex,Node.Children[Index].Index,Matrix,Dirty,MatrixDirty,EffectiveVisible);
  end;
 end;
 
@@ -28808,7 +28869,7 @@ begin
   StartCPUTime:=pvApplication.HighResolutionTimer.GetTime;
 {$endif}
   for Index:=0 to aScene.fNodes.Count-1 do begin
-   ProcessNode(aInFlightFrameIndex,aScene.fNodes[Index].Index,TpvMatrix4x4.Identity,Dirty,Dirty);
+   ProcessNode(aInFlightFrameIndex,aScene.fNodes[Index].Index,TpvMatrix4x4.Identity,Dirty,Dirty,true);
   end;
 {$ifdef UpdateProfilingTimes}
   EndCPUTime:=pvApplication.HighResolutionTimer.GetTime;
@@ -29990,7 +30051,7 @@ begin
     StartCPUTime:=pvApplication.HighResolutionTimer.GetTime;
 {$endif}
     for Index:=0 to Scene.fNodes.Count-1 do begin
-     ProcessNode(aInFlightFrameIndex,Scene.fNodes[Index].Index,TpvMatrix4x4.Identity,Dirty,Dirty);
+     ProcessNode(aInFlightFrameIndex,Scene.fNodes[Index].Index,TpvMatrix4x4.Identity,Dirty,Dirty,true);
     end;
 {$ifdef UpdateProfilingTimes}
     EndCPUTime:=pvApplication.HighResolutionTimer.GetTime;
@@ -31444,19 +31505,23 @@ begin
 
           InstanceNode:=fNodes.RawItems[AABBTreeSkipListItem^.UserData-1];
 
-          DrawChoreographyBatchItemIndices:=@Node.fDrawChoreographyBatchItemIndices;
-          for DrawChoreographyBatchItemIndex:=0 to DrawChoreographyBatchItemIndices^.Count-1 do begin
-           DrawChoreographyBatchItemElementIndex:=DrawChoreographyBatchItemIndices^.Items[DrawChoreographyBatchItemIndex];
-           DrawChoreographyBatchItem:=fDrawChoreographyBatchItems[DrawChoreographyBatchItemElementIndex];
-           if DrawChoreographyBatchItem.fMaterial.fVisible and
-              (DrawChoreographyBatchItem.fAlphaMode in aMaterialAlphaModes) and
-              ((not aShadowPass) or (aShadowPass and DrawChoreographyBatchItem.fMaterial.fData.CastingShadows and InstanceNode.fInFlightFrameCastingShadows[aInFlightFrameIndex])) and
-             (DrawChoreographyBatchItem.fCountIndices>0) then begin
-            DrawChoreographyBatchItemMaterialAlphaModeBuckets^[DrawChoreographyBatchItem.fAlphaMode,
-                                                               DrawChoreographyBatchItem.fPrimitiveTopology,
-                                                               DoubleSidedFaceCullingModes[DrawChoreographyBatchItem.fDoubleSided,
-                                                                                           InstanceNode.InverseFrontFaces]].Add(DrawChoreographyBatchItem);
+          if InstanceNode.fInFlightFrameVisible[aInFlightFrameIndex] then begin
+
+           DrawChoreographyBatchItemIndices:=@Node.fDrawChoreographyBatchItemIndices;
+           for DrawChoreographyBatchItemIndex:=0 to DrawChoreographyBatchItemIndices^.Count-1 do begin
+            DrawChoreographyBatchItemElementIndex:=DrawChoreographyBatchItemIndices^.Items[DrawChoreographyBatchItemIndex];
+            DrawChoreographyBatchItem:=fDrawChoreographyBatchItems[DrawChoreographyBatchItemElementIndex];
+            if DrawChoreographyBatchItem.fMaterial.fVisible and
+               (DrawChoreographyBatchItem.fAlphaMode in aMaterialAlphaModes) and
+               ((not aShadowPass) or (aShadowPass and DrawChoreographyBatchItem.fMaterial.fData.CastingShadows and InstanceNode.fInFlightFrameCastingShadows[aInFlightFrameIndex])) and
+              (DrawChoreographyBatchItem.fCountIndices>0) then begin
+             DrawChoreographyBatchItemMaterialAlphaModeBuckets^[DrawChoreographyBatchItem.fAlphaMode,
+                                                                DrawChoreographyBatchItem.fPrimitiveTopology,
+                                                                DoubleSidedFaceCullingModes[DrawChoreographyBatchItem.fDoubleSided,
+                                                                                            InstanceNode.InverseFrontFaces]].Add(DrawChoreographyBatchItem);
+            end;
            end;
+
           end;
 
          end;
@@ -31501,7 +31566,7 @@ begin
 
      InstanceNode:=fNodes.RawItems[SkipListItem^.NodeIndex];
 
-     PotentiallyVisible:=true;
+     PotentiallyVisible:=InstanceNode.fInFlightFrameVisible[aInFlightFrameIndex];
 
      if DoCulling then begin
 
@@ -38743,7 +38808,8 @@ begin
    TpvScene3D.TGroup.TAnimation.TChannel.TTarget.PointerNodeTranslation,
    TpvScene3D.TGroup.TAnimation.TChannel.TTarget.PointerNodeRotation,
    TpvScene3D.TGroup.TAnimation.TChannel.TTarget.PointerNodeScale,
-   TpvScene3D.TGroup.TAnimation.TChannel.TTarget.PointerNodeWeights:begin
+   TpvScene3D.TGroup.TAnimation.TChannel.TTarget.PointerNodeWeights,
+   TpvScene3D.TGroup.TAnimation.TChannel.TTarget.PointerNodeExtensionsKHRNodeVisibilityVisible:begin
     Index:=1;
    end;
 
