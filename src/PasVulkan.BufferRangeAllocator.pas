@@ -115,11 +115,12 @@ type { TpvBufferRangeAllocator }
        fOffsetRedBlackTree:TRangeRedBlackTree;
        fSizeRedBlackTree:TRangeRedBlackTree;
        fCapacity:TpvInt64;
+       fMaxCapacity:TpvInt64;
        fOnResize:TOnResize;
        fAllocated:TpvInt64;
        fLock:TPasMPCriticalSection;
       public
-       constructor Create(const aCapacity:TpvInt64=0); reintroduce;
+       constructor Create(const aCapacity:TpvInt64=0;const aMaxCapacity:TpvInt64=0); reintroduce;
        destructor Destroy; override;
        function Allocate(const aSize:TpvInt64;const aAlignment:TpvInt64=1):TpvInt64;
        function Release(const aOffset:TpvInt64;const aSize:TpvInt64=-1):Boolean;
@@ -131,6 +132,8 @@ type { TpvBufferRangeAllocator }
        function Defragment(const aMove:TOnDefragmentMove):Boolean;
       published
        property Capacity:TpvInt64 read fCapacity;
+       property MaxCapacity:TpvInt64 read fMaxCapacity write fMaxCapacity;
+       property Allocated:TpvInt64 read fAllocated;
        property OnResize:TOnResize read fOnResize write fOnResize; 
      end;
 
@@ -193,7 +196,7 @@ end;
 
 { TpvBufferRangeAllocator }
 
-constructor TpvBufferRangeAllocator.Create(const aCapacity:TpvInt64=0);
+constructor TpvBufferRangeAllocator.Create(const aCapacity:TpvInt64=0;const aMaxCapacity:TpvInt64=0);
 begin
  inherited Create;
  fLock:=TPasMPCriticalSection.Create;
@@ -201,6 +204,7 @@ begin
  fSizeRedBlackTree:=TRangeRedBlackTree.Create;
  fOnResize:=nil;
  fAllocated:=0;
+ fMaxCapacity:=aMaxCapacity;
  fCapacity:=aCapacity;
  if fCapacity>0 then begin
   TpvBufferRangeAllocator.TRange.Create(self,0,fCapacity,1,TpvBufferRangeAllocator.TRange.TAllocationType.Free);
@@ -345,6 +349,12 @@ begin
 
      end;
 
+    end;
+
+    // Check if growth would exceed max capacity
+    if (fMaxCapacity>0) and ((fCapacity+aSize)>fMaxCapacity) then begin
+     result:=-1;
+     exit;
     end;
 
     // Otherwise, try to resize the buffer

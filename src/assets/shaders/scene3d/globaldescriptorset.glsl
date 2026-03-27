@@ -30,8 +30,10 @@ struct Material {
 };
 #endif
 
-layout(set = 0, binding = 0, std430) readonly buffer InstanceMatrices {
-  mat4 instanceMatrices[];
+#include "drawinfo.glsl"
+
+layout(set = 0, binding = 0, std430) readonly buffer DrawInfoBuffer {
+  DrawInfo drawInfoItems[];
 };
 //#endif // MESHS
 
@@ -149,9 +151,10 @@ layout(set = 0, binding = 6, std430) readonly buffer InstanceDataBuffer {
   InstanceData instanceDataItems[];
 };
 
-layout(set = 0, binding = 7, std430) readonly buffer InstanceDataIndexBuffer {
-  uint instanceDataIndices[];
-};
+// InstanceDataIndexBuffer removed — instanceDataIndex is now in DrawInfo
+// layout(set = 0, binding = 7, std430) readonly buffer InstanceDataIndexBuffer {
+//   uint instanceDataIndices[];
+// };
 
 #ifdef RAYTRACING
 

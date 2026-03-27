@@ -185,12 +185,12 @@ compileshaderarguments=(
   "-V mesh.comp -o ${tempPath}/mesh_comp.spv"
   "-V mesh.comp -DRAYTRACING -o ${tempPath}/mesh_raytracing_comp.spv"
 
-  "-V mesh_cull.comp -DPASS=0 -o ${tempPath}/mesh_cull_pass0_comp.spv"
-  "-V mesh_cull.comp -DPASS=1 -o ${tempPath}/mesh_cull_pass1_comp.spv"
+  "-V mesh_cull.comp --target-env vulkan1.2 -DPASS=0 -o ${tempPath}/mesh_cull_pass0_comp.spv"
+  "-V mesh_cull.comp --target-env vulkan1.2 -DPASS=1 -o ${tempPath}/mesh_cull_pass1_comp.spv"
 
-  "-V mesh.vert -o ${tempPath}/mesh_vert.spv"
-  "-V mesh.vert -DVELOCITY -o ${tempPath}/mesh_velocity_vert.spv"
-  "-V mesh.vert -DVOXELIZATION -o ${tempPath}/mesh_voxelization_vert.spv"
+  "-V mesh.vert --target-env vulkan1.2 -o ${tempPath}/mesh_vert.spv"
+  "-V mesh.vert --target-env vulkan1.2 -DVELOCITY -o ${tempPath}/mesh_velocity_vert.spv"
+  "-V mesh.vert --target-env vulkan1.2 -DVOXELIZATION -o ${tempPath}/mesh_voxelization_vert.spv"
 
   "-V gi_voxel_occlusion_transfer.comp -o ${tempPath}/gi_voxel_occlusion_transfer_comp.spv"
   "-V gi_voxel_occlusion_mipmap.comp -o ${tempPath}/gi_voxel_occlusion_mipmap_comp.spv"
