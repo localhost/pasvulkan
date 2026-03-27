@@ -2249,10 +2249,10 @@ type EpvScene3D=class(Exception);
                                    PointerMaterialHologramGlowSpeed,
                                    PointerMaterialHologramGlowMin,
                                    PointerMaterialHologramGlowMax,
-                                   PointerNodeExtensionsKHRNodeVisibilityVisible,
                                    PointerTextureOffset,
                                    PointerTextureRotation,
-                                   PointerTextureScale
+                                   PointerTextureScale,
+                                   PointerNodeExtensionsKHRNodeVisibilityVisible
                                   );
                                  TTargetSet=set of TTarget;
                                  TInterpolation=
