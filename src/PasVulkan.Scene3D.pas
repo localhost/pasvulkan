@@ -402,7 +402,7 @@ type EpvScene3D=class(Exception);
             TGPUDrawInfo=packed record
              case boolean of
               false:(
-               CachedVerticesDeviceAddress:TVkDeviceAddress;          //   8 =   8 (BDA to CachedVertex array)
+               CachedVerticesDeviceAddress:TVkDeviceAddress;           //   8 =   8 (BDA to CachedVertex array)
                StaticVerticesDeviceAddress:TVkDeviceAddress;           // + 8 =  16 (BDA to StaticVertex array)
                PreviousCachedVerticesDeviceAddress:TVkDeviceAddress;   // + 8 =  24 (BDA to previous frame CachedVertex, velocity)
                GenerationDeviceAddress:TVkDeviceAddress;               // + 8 =  32 (BDA to per-vertex generation, velocity)
@@ -413,7 +413,7 @@ type EpvScene3D=class(Exception);
                InstanceDataIndex:TpvUInt32;                            // + 4 = 180
                ObjectIndex:TpvUInt32;                                  // + 4 = 184
                Flags:TpvUInt32;                                        // + 4 = 188
-               DrawInfoPadding:TpvUInt32;                              // + 4 = 192
+               IndexOffset:TpvUInt32;                                  // + 4 = 192 (vertex index offset for per-group buffers, 0 for big-buffer)
               );                                                       //  ==   ==
               true:(                                                   // 192  192 per draw
                RawData:array[0..191] of TpvUInt8;

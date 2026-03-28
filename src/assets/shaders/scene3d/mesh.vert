@@ -84,12 +84,15 @@ void main() {
   const uint drawIndex = uint(gl_BaseInstance);
   DrawInfo drawInfo = drawInfoItems[drawIndex];
 
+  // Vertex index adjusted by per-group offset (0 for big-buffer, base vertex for per-group buffers)
+  const uint vertexIndex = uint(gl_VertexIndex) - drawInfo.indexOffset;
+
   // Fetch vertex data via BDA vertex pulling
   CachedVertexBuffer cachedVerts = CachedVertexBuffer(drawInfo.cachedVerticesBDA);
   StaticVertexBuffer staticVerts = StaticVertexBuffer(drawInfo.staticVerticesBDA);
 
-  PackedCachedVertex cv = cachedVerts.vertices[gl_VertexIndex];
-  PackedStaticVertex sv = staticVerts.vertices[gl_VertexIndex];
+  PackedCachedVertex cv = cachedVerts.vertices[vertexIndex];
+  PackedStaticVertex sv = staticVerts.vertices[vertexIndex];
 
   // Unpack vertex attributes
   vec3 position = unpackPosition(cv);
@@ -106,9 +109,9 @@ void main() {
   CachedVertexBuffer prevCachedVerts = CachedVertexBuffer(drawInfo.previousCachedVerticesBDA);
   GenerationBuffer genBuf = GenerationBuffer(drawInfo.generationBDA);
   GenerationBuffer prevGenBuf = GenerationBuffer(drawInfo.previousGenerationBDA);
-  vec3 previousPosition = unpackPosition(prevCachedVerts.vertices[gl_VertexIndex]);
-  uint generation = genBuf.generations[gl_VertexIndex];
-  uint previousGeneration = prevGenBuf.generations[gl_VertexIndex];
+  vec3 previousPosition = unpackPosition(prevCachedVerts.vertices[vertexIndex]);
+  uint generation = genBuf.generations[vertexIndex];
+  uint previousGeneration = prevGenBuf.generations[vertexIndex];
 #endif
 
   // Build tangent space
