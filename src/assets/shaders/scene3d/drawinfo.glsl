@@ -72,7 +72,7 @@ struct GlobalBDAPointers {
 //   offset  96: instanceDataIndex        (uint, 4 bytes)
 //   offset 100: objectIndex              (uint, 4 bytes)
 //   offset 104: flags                    (uint, 4 bytes)
-//   offset 108: indexOffset              (uint, 4 bytes, vertex index offset for per-group buffers)
+//   offset 108: reserved                 (uint, 4 bytes)
 //   offset 112: _padding                 (uvec4, 16 bytes — padding to 128 for power-of-two alignment)
 // Total: 128 bytes
 
@@ -90,7 +90,7 @@ struct DrawInfo {
   uint instanceDataIndex;
   uint objectIndex;
   uint flags;
-  uint indexOffset;
+  uint reserved; 
   uvec4 _padding;
 };
 

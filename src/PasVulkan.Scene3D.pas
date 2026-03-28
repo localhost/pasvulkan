@@ -6,7 +6,7 @@
  *                                zlib license                                *
  *============================================================================*
  *                                                                            *
- * Copyright (C) 2016-2024, Benjamin Rosseaux (benjamin@rosseaux.de)          *
+ * Copyright (C) 2016-2026, Benjamin Rosseaux (benjamin@rosseaux.de)          *
  *                                                                            *
  * This software is provided 'as-is', without any express or implied          *
  * warranty. In no event will the authors be held liable for any damages      *
@@ -443,7 +443,7 @@ type EpvScene3D=class(Exception);
                InstanceDataIndex:TpvUInt32;                            // + 4 = 100
                ObjectIndex:TpvUInt32;                                  // + 4 = 104
                Flags:TpvUInt32;                                        // + 4 = 108
-               IndexOffset:TpvUInt32;                                  // + 4 = 112 (vertex index offset for per-group buffers, 0 for big-buffer)
+               Reserved:TpvUInt32;                                     // + 4 = 112 (reserved for future use)
                Padding:array[0..3] of TpvUInt32;                       // +16 = 128 (padding to power-of-two)
               );                                                       //  ==   ==
               true:(                                                   // 128  128 per draw

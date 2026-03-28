@@ -89,8 +89,11 @@ void main() {
   const uint drawIndex = uint(gl_InstanceIndex);
   DrawInfo drawInfo = drawInfoItems[drawIndex];
 
-  // Vertex index adjusted by per-group offset (0 for big-buffer, base vertex for per-group buffers)
-  const uint vertexIndex = uint(gl_VertexIndex) - drawInfo.indexOffset;
+  // Vertex index for vertex pulling, it matches the vertex index used in the CPU-side mesh compaction and 
+  // GPU-side mesh cull compute shader, which is a global index across all meshes and instances, not a 
+  // per-mesh local index. This allows us to use a single global vertex buffer (big-buffer approach) and 
+  // fetch vertex data directly via BDA without needing to worry about per-mesh offsets or multiple buffers.
+  const uint vertexIndex = uint(gl_VertexIndex);
 
   // Fetch vertex data via BDA vertex pulling (BDA pointers from global SSBO at binding 7)
   CachedVertexBuffer cachedVerts = CachedVertexBuffer(globalBDAPointers.cachedVerticesBDA);
