@@ -2134,6 +2134,8 @@ type EpvApplication=class(Exception)
 
        function WaitForPreviousFrame(const aBlocking:Boolean=true):Boolean; virtual;
 
+       procedure WaitForAllInFlightFrames;
+
        procedure Draw(const aSwapChainImageIndex:TpvInt32;var aWaitSemaphore:TpvVulkanSemaphore;const aWaitFence:TpvVulkanFence=nil); virtual;
 
        procedure FinishFrame(const aSwapChainImageIndex:TpvInt32;var aWaitSemaphore:TpvVulkanSemaphore;const aWaitFence:TpvVulkanFence=nil); virtual; // example for VR output handling of the rendered stereo images
@@ -11159,6 +11161,29 @@ begin
    fVulkanEventLock.Release;
   end;
   result:=OK;
+ end;
+end;
+
+procedure TpvApplication.WaitForAllInFlightFrames;
+var InFlightFrameIndex:TpvSizeInt;
+    InFlightFenceIndex:TpvSizeInt;
+begin
+ fVulkanEventLock.Acquire;
+ try
+  for InFlightFrameIndex:=0 to fCountInFlightFrames-1 do begin
+   InFlightFenceIndex:=fVulkanInFlightFenceIndices[InFlightFrameIndex];
+   if (InFlightFenceIndex>=0) and
+      fVulkanWaitFencesReady[InFlightFenceIndex] then begin
+    if fVulkanWaitFences[InFlightFenceIndex].GetStatus<>VK_SUCCESS then begin
+     fVulkanWaitFences[InFlightFenceIndex].WaitFor;
+    end;
+    fVulkanWaitFences[InFlightFenceIndex].Reset;
+    fVulkanWaitFencesReady[InFlightFenceIndex]:=false;
+    fVulkanInFlightFenceIndices[InFlightFrameIndex]:=-1;
+   end;
+  end;
+ finally
+  fVulkanEventLock.Release;
  end;
 end;
 

@@ -11525,6 +11525,8 @@ begin
     fVulkan11Features.multiviewTessellationShader:=PhysicalDevice.fVulkan11Features.multiviewTessellationShader;
     fVulkan11Features.multiviewGeometryShader:=PhysicalDevice.fVulkan11Features.multiviewGeometryShader;
 
+    fVulkan11Features.shaderDrawParameters:=PhysicalDevice.fVulkan11Features.shaderDrawParameters;
+
     fMultiviewFeaturesKHR.multiview:=PhysicalDevice.fVulkan11Features.multiview;
     fMultiviewFeaturesKHR.multiviewTessellationShader:=PhysicalDevice.fVulkan11Features.multiviewTessellationShader;
     fMultiviewFeaturesKHR.multiviewGeometryShader:=PhysicalDevice.fVulkan11Features.multiviewGeometryShader;

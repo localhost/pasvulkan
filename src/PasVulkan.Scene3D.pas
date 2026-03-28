@@ -33004,6 +33004,7 @@ var PerInFlightFrameRenderInstanceIndex,FrustumIndex,ViewIndex,InstancesCount:Tp
     GlobalVulkanDrawInfoDynamicArray:PGlobalVulkanDrawInfoDynamicArray;
     GlobalRenderInstanceCullDataDynamicArray:PGlobalRenderInstanceCullDataDynamicArray;
     GlobalRenderInstanceCullData:PCullData;
+    CurrentDrawInfo:PGPUDrawInfo;
     PerInFlightFrameRenderInstanceDynamicArray:TpvScene3D.TGroup.TInstance.PPerInFlightFrameRenderInstanceDynamicArray;
     PerInFlightFrameRenderInstance:TpvScene3D.TGroup.TInstance.PPerInFlightFrameRenderInstance;
     GlobalVulkanInstanceCount:PPasMPUInt32;
@@ -33069,11 +33070,10 @@ begin
     GlobalVulkanGPUInstanceDataIndexDynamicArray^.Add(PerInFlightFrameRenderInstance^.InstanceDataIndex);
     // DrawInfo entry for this instanced render instance (BDA pointers filled later per frame)
     FillChar(GlobalVulkanDrawInfoDynamicArray^.AddNew^,SizeOf(TGPUDrawInfo),#0);
-    with GlobalVulkanDrawInfoDynamicArray^.ItemArray[GlobalVulkanDrawInfoDynamicArray^.Count-1] do begin
-     ModelMatrix:=PerInFlightFrameRenderInstance^.ModelMatrix;
-     PreviousModelMatrix:=PerInFlightFrameRenderInstance^.PreviousModelMatrix;
-     InstanceDataIndex:=PerInFlightFrameRenderInstance^.InstanceDataIndex;
-    end;
+    CurrentDrawInfo:=@GlobalVulkanDrawInfoDynamicArray^.ItemArray[GlobalVulkanDrawInfoDynamicArray^.Count-1];
+    CurrentDrawInfo^.ModelMatrix:=PerInFlightFrameRenderInstance^.ModelMatrix;
+    CurrentDrawInfo^.PreviousModelMatrix:=PerInFlightFrameRenderInstance^.PreviousModelMatrix;
+    CurrentDrawInfo^.InstanceDataIndex:=PerInFlightFrameRenderInstance^.InstanceDataIndex;
     GlobalRenderInstanceCullData:=Pointer(GlobalRenderInstanceCullDataDynamicArray^.AddNew);
     GlobalRenderInstanceCullData^.RenderInstance:=PerInFlightFrameRenderInstance.RenderInstance;
     inc(InstancesCount);
@@ -39007,6 +39007,7 @@ var Index,ItemID,PlanetIndex:TpvSizeInt;
     InFlightFrameMaterialBufferVulkanGPUData:PMaterialBufferData;
     VulkanMaterialDataBuffer:TpvVulkanBuffer;
     DrawInfoIndex,PreviousInFlightFrameIndex:TpvSizeInt;
+    CurrentDrawInfo:PGPUDrawInfo;
     DrawInfoBDACachedVertices,DrawInfoBDAStaticVertices,DrawInfoBDAPreviousCachedVertices,DrawInfoBDAGeneration,DrawInfoBDAPreviousGeneration:TVkDeviceAddress;
 begin
 
@@ -39624,13 +39625,12 @@ begin
      DrawInfoBDAPreviousGeneration:=fVulkanShortTermDynamicBuffers.fBufferDataArray[aInFlightFrameIndex].fVulkanCachedVertexGenerationBuffer.DeviceAddress;
     end;
     for DrawInfoIndex:=0 to fGlobalVulkanDrawInfoDynamicArrays[aInFlightFrameIndex].Count-1 do begin
-     with fGlobalVulkanDrawInfoDynamicArrays[aInFlightFrameIndex].ItemArray[DrawInfoIndex] do begin
-      CachedVerticesDeviceAddress:=DrawInfoBDACachedVertices;
-      StaticVerticesDeviceAddress:=DrawInfoBDAStaticVertices;
-      PreviousCachedVerticesDeviceAddress:=DrawInfoBDAPreviousCachedVertices;
-      GenerationDeviceAddress:=DrawInfoBDAGeneration;
-      PreviousGenerationDeviceAddress:=DrawInfoBDAPreviousGeneration;
-     end;
+     CurrentDrawInfo:=@fGlobalVulkanDrawInfoDynamicArrays[aInFlightFrameIndex].ItemArray[DrawInfoIndex];
+     CurrentDrawInfo^.CachedVerticesDeviceAddress:=DrawInfoBDACachedVertices;
+     CurrentDrawInfo^.StaticVerticesDeviceAddress:=DrawInfoBDAStaticVertices;
+     CurrentDrawInfo^.PreviousCachedVerticesDeviceAddress:=DrawInfoBDAPreviousCachedVertices;
+     CurrentDrawInfo^.GenerationDeviceAddress:=DrawInfoBDAGeneration;
+     CurrentDrawInfo^.PreviousGenerationDeviceAddress:=DrawInfoBDAPreviousGeneration;
     end;
    end;
 
