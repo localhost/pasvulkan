@@ -416,7 +416,15 @@ type EpvScene3D=class(Exception);
             end;
             PGPUGlobalBDAPointers=^TGPUGlobalBDAPointers;
             TGlobalVulkanBDAPointersBuffers=array[0..MaxInFlightFrames-1] of TpvVulkanBuffer;
-            { TGPUDrawInfo - 144 bytes per draw command, stored in SSBO at binding 0 }
+            { TGPUDrawInfoMatrix — packed affine transform as 3 x TpvVector4 = 48 bytes }
+            { Each vec4 stores original column .xyz with translation component in .w: }
+            {   [0] = vec4(col0.xyz, translation.x)                                   }
+            {   [1] = vec4(col1.xyz, translation.y)                                   }
+            {   [2] = vec4(col2.xyz, translation.z)                                   }
+            { The implicit 4th row is always (0, 0, 0, 1) for affine transforms.      }
+            TGPUDrawInfoMatrix=packed array[0..2] of TpvVector4;
+            PGPUDrawInfoMatrix=^TGPUDrawInfoMatrix;
+            { TGPUDrawInfo - 128 bytes per draw command, stored in SSBO at binding 0 }
             { Layout must match the DrawInfo struct in drawinfo.glsl exactly (std430) }
             { BDA pointers moved to TGPUGlobalBDAPointers at binding 7 (global for big-buffer mode) }
             TGPUDrawInfo=packed record
@@ -430,15 +438,16 @@ type EpvScene3D=class(Exception);
                //GenerationDeviceAddress:TVkDeviceAddress;               // + 8 =  32 (BDA to per-vertex generation, velocity)
                //PreviousGenerationDeviceAddress:TVkDeviceAddress;       // + 8 =  40 (BDA to previous frame generation, velocity)
                //Reserved:TVkDeviceAddress;                              // + 8 =  48 (padding for mat4 alignment)
-               ModelMatrix:TpvMatrix4x4;                               //  64 =  64 (world transform, Identity for pre-transformed)
-               PreviousModelMatrix:TpvMatrix4x4;                       // +64 = 128 (previous frame world transform, velocity)
-               InstanceDataIndex:TpvUInt32;                            // + 4 = 132
-               ObjectIndex:TpvUInt32;                                  // + 4 = 136
-               Flags:TpvUInt32;                                        // + 4 = 140
-               IndexOffset:TpvUInt32;                                  // + 4 = 144 (vertex index offset for per-group buffers, 0 for big-buffer)
+               ModelMatrix:TGPUDrawInfoMatrix;                         //  48 =  48 (affine world transform, Identity for pre-transformed)
+               PreviousModelMatrix:TGPUDrawInfoMatrix;                 // +48 =  96 (previous frame affine world transform, velocity)
+               InstanceDataIndex:TpvUInt32;                            // + 4 = 100
+               ObjectIndex:TpvUInt32;                                  // + 4 = 104
+               Flags:TpvUInt32;                                        // + 4 = 108
+               IndexOffset:TpvUInt32;                                  // + 4 = 112 (vertex index offset for per-group buffers, 0 for big-buffer)
+               Padding:array[0..3] of TpvUInt32;                       // +16 = 128 (padding to power-of-two)
               );                                                       //  ==   ==
-              true:(                                                   // 144  144 per draw
-               RawData:array[0..143] of TpvUInt8;
+              true:(                                                   // 128  128 per draw
+               RawData:array[0..127] of TpvUInt8;
               );
             end;
             PGPUDrawInfo=^TGPUDrawInfo;
@@ -4990,6 +4999,8 @@ type EpvScene3D=class(Exception);
        property ProceduralTextureImageHookStringHashMap:TProceduralTextureImageHookStringHashMap read fProceduralTextureImageHookStringHashMap;
      end;
 
+function Matrix4x4ToGPUDrawInfoMatrix(const aMatrix:TpvMatrix4x4):TpvScene3D.TGPUDrawInfoMatrix; {$ifdef CAN_INLINE}inline;{$endif}
+
 implementation
 
 uses PasVulkan.PasMP,
@@ -5008,6 +5019,13 @@ const FlushUpdateData=false;
 type TAnimationChannelTargetOverwriteGroupMap=array[TpvScene3D.TGroup.TAnimation.TChannel.TTarget] of TpvUInt64;
 
 var AnimationChannelTargetOverwriteGroupMap:TAnimationChannelTargetOverwriteGroupMap;
+
+function Matrix4x4ToGPUDrawInfoMatrix(const aMatrix:TpvMatrix4x4):TpvScene3D.TGPUDrawInfoMatrix;
+begin
+ result[0].xyz:=aMatrix.RawVectors[0].xyz; result[0].w:=aMatrix.RawVectors[3].x;
+ result[1].xyz:=aMatrix.RawVectors[1].xyz; result[1].w:=aMatrix.RawVectors[3].y;
+ result[2].xyz:=aMatrix.RawVectors[2].xyz; result[2].w:=aMatrix.RawVectors[3].z;
+end;
 
 function ToFixed(const aValue:TpvDouble;const aDecimalPlaces:TpvInt32):TpvUTF8String;
 begin
@@ -33122,8 +33140,8 @@ begin
     // DrawInfo entry for this instanced render instance (BDA pointers filled later per frame)
     FillChar(GlobalVulkanDrawInfoDynamicArray^.AddNew^,SizeOf(TGPUDrawInfo),#0);
     CurrentDrawInfo:=@GlobalVulkanDrawInfoDynamicArray^.ItemArray[GlobalVulkanDrawInfoDynamicArray^.Count-1];
-    CurrentDrawInfo^.ModelMatrix:=PerInFlightFrameRenderInstance^.ModelMatrix;
-    CurrentDrawInfo^.PreviousModelMatrix:=PerInFlightFrameRenderInstance^.PreviousModelMatrix;
+    CurrentDrawInfo^.ModelMatrix:=Matrix4x4ToGPUDrawInfoMatrix(PerInFlightFrameRenderInstance^.ModelMatrix);
+    CurrentDrawInfo^.PreviousModelMatrix:=Matrix4x4ToGPUDrawInfoMatrix(PerInFlightFrameRenderInstance^.PreviousModelMatrix);
     CurrentDrawInfo^.InstanceDataIndex:=PerInFlightFrameRenderInstance^.InstanceDataIndex;
     GlobalRenderInstanceCullData:=Pointer(GlobalRenderInstanceCullDataDynamicArray^.AddNew);
     GlobalRenderInstanceCullData^.RenderInstance:=PerInFlightFrameRenderInstance.RenderInstance;
@@ -33948,8 +33966,8 @@ begin
   fGlobalVulkanDrawInfoDynamicArrays[Index].Count:=0;
   // Entry 0: default DrawInfo for non-instanced draws (BDA pointers filled per frame)
   FillChar(fGlobalVulkanDrawInfoDynamicArrays[Index].AddNew^,SizeOf(TGPUDrawInfo),#0);
-  fGlobalVulkanDrawInfoDynamicArrays[Index].ItemArray[0].ModelMatrix:=TpvMatrix4x4.Identity;
-  fGlobalVulkanDrawInfoDynamicArrays[Index].ItemArray[0].PreviousModelMatrix:=TpvMatrix4x4.Identity;
+  fGlobalVulkanDrawInfoDynamicArrays[Index].ItemArray[0].ModelMatrix:=Matrix4x4ToGPUDrawInfoMatrix(TpvMatrix4x4.Identity);
+  fGlobalVulkanDrawInfoDynamicArrays[Index].ItemArray[0].PreviousModelMatrix:=Matrix4x4ToGPUDrawInfoMatrix(TpvMatrix4x4.Identity);
 
   fGlobalRenderInstanceCullDataDynamicArrays[Index].Initialize;
   fGlobalRenderInstanceCullDataDynamicArrays[Index].Resize(65536);
@@ -37760,8 +37778,8 @@ begin
  if GlobalVulkanDrawInfoDynamicArray^.Count<1 then begin
   GlobalVulkanDrawInfoDynamicArray^.Count:=0;
   FillChar(GlobalVulkanDrawInfoDynamicArray^.AddNew^,SizeOf(TGPUDrawInfo),#0);
-  GlobalVulkanDrawInfoDynamicArray^.ItemArray[0].ModelMatrix:=TpvMatrix4x4.Identity;
-  GlobalVulkanDrawInfoDynamicArray^.ItemArray[0].PreviousModelMatrix:=TpvMatrix4x4.Identity;
+  GlobalVulkanDrawInfoDynamicArray^.ItemArray[0].ModelMatrix:=Matrix4x4ToGPUDrawInfoMatrix(TpvMatrix4x4.Identity);
+  GlobalVulkanDrawInfoDynamicArray^.ItemArray[0].PreviousModelMatrix:=Matrix4x4ToGPUDrawInfoMatrix(TpvMatrix4x4.Identity);
  end;
  GlobalVulkanDrawInfoDynamicArray^.Count:=1;
 

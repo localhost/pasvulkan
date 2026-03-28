@@ -249,7 +249,7 @@ void main(){
     // Transform bounding sphere by model matrix from DrawInfo.
     // For pre-transformed meshes: modelMatrix = Identity => no-op (sphere unchanged).
     // For instanced meshes: modelMatrix = world transform => sphere in world space.
-    boundingSphere = sphereTransform(boundingSphere, drawInfoItems[cmd1.x].modelMatrix);
+    boundingSphere = sphereTransform(boundingSphere, mat3x4ToMat4(drawInfoItems[cmd1.x].modelMatrix));
  
     vec2 viewPortSize = vec2(textureSize(uTextureDepths[nonuniformEXT(pushConstants.textureDepthIndex)], 0).xy);
     int countLODLevels = textureQueryLevels(uTextureDepths[nonuniformEXT(pushConstants.textureDepthIndex)]);

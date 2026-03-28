@@ -151,7 +151,7 @@ void main() {
   // Unified transform path — no more if(instanceIndex > 0u) branching.
   // For pre-transformed meshes (mesh.comp output): modelMatrix = Identity => no-op.
   // For instanced meshes: modelMatrix = world transform.
-  mat4 modelMatrix = drawInfo.modelMatrix;
+  mat4 modelMatrix = mat3x4ToMat4(drawInfo.modelMatrix);
 
   modelScale *= vec3(length(modelMatrix[0].xyz), length(modelMatrix[1].xyz), length(modelMatrix[2].xyz));
 
@@ -171,7 +171,7 @@ void main() {
     previousClipSpacePosition = clipSpacePosition;
   }else{
     View previousView = uView.views[viewIndex + pushConstants.countAllViews];
-    previousClipSpacePosition = previousView.projectionMatrix * ((previousView.viewMatrix * drawInfo.previousModelMatrix) * vec4(previousPosition, 1.0));
+    previousClipSpacePosition = previousView.projectionMatrix * ((previousView.viewMatrix * mat3x4ToMat4(drawInfo.previousModelMatrix)) * vec4(previousPosition, 1.0));
   }
 #endif
 

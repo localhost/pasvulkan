@@ -61,16 +61,20 @@ struct GlobalBDAPointers {
   uvec2 _reserved;
 };
 
-// DrawInfo struct — 144 bytes per draw, stored in SSBO at binding 0
+// DrawInfo struct — 128 bytes per draw, stored in SSBO at binding 0
 // BDA pointers moved to GlobalBDAPointers at binding 7 (global for big-buffer mode)
+// Matrices stored as mat3x4 (3 columns of vec4 = 48 bytes each) for affine transforms:
+//   Each mat3x4 column stores original_column.xyz with translation component in .w
+//   The implicit 4th row of the affine matrix is always (0, 0, 0, 1)
 // Layout (std430):
-//   offset  0: modelMatrix                (mat4, 64 bytes)
-//   offset 64: previousModelMatrix        (mat4, 64 bytes, velocity)
-//   offset 128: instanceDataIndex         (uint, 4 bytes)
-//   offset 132: objectIndex               (uint, 4 bytes)
-//   offset 136: flags                     (uint, 4 bytes)
-//   offset 140: indexOffset               (uint, 4 bytes, vertex index offset for per-group buffers)
-// Total: 144 bytes
+//   offset   0: modelMatrix              (mat3x4, 48 bytes — affine world transform, Identity for pre-transformed)
+//   offset  48: previousModelMatrix      (mat3x4, 48 bytes — previous frame, velocity)
+//   offset  96: instanceDataIndex        (uint, 4 bytes)
+//   offset 100: objectIndex              (uint, 4 bytes)
+//   offset 104: flags                    (uint, 4 bytes)
+//   offset 108: indexOffset              (uint, 4 bytes, vertex index offset for per-group buffers)
+//   offset 112: _padding                 (uvec4, 16 bytes — padding to 128 for power-of-two alignment)
+// Total: 128 bytes
 
 struct DrawInfo {
   // BDA pointers commented out — now in GlobalBDAPointers at binding 7
@@ -81,13 +85,28 @@ struct DrawInfo {
   //uvec2 generationBDA;
   //uvec2 previousGenerationBDA;
   //uvec2 _reserved;
-  mat4 modelMatrix;
-  mat4 previousModelMatrix;
+  mat3x4 modelMatrix;
+  mat3x4 previousModelMatrix;
   uint instanceDataIndex;
   uint objectIndex;
   uint flags;
   uint indexOffset;
+  uvec4 _padding;
 };
+
+// Reconstruct a full mat4 from a packed mat3x4 affine transform.
+// The mat3x4 stores the first 3 columns' xyz in .xyz and translation in .w:
+//   m[0] = vec4(col0.xyz, translation.x)
+//   m[1] = vec4(col1.xyz, translation.y)
+//   m[2] = vec4(col2.xyz, translation.z)
+mat4 mat3x4ToMat4(const in mat3x4 m) {
+  return mat4(
+    vec4(m[0].xyz, 0.0),
+    vec4(m[1].xyz, 0.0),
+    vec4(m[2].xyz, 0.0),
+    vec4(m[0].w, m[1].w, m[2].w, 1.0)
+  );
+}
 
 // Unpacking helpers for PackedCachedVertex
 
