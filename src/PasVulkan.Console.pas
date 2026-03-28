@@ -987,6 +987,7 @@ begin
  if OK then begin
   if fIgnoreDuplicateHistoryEntries and (fHistory.Count>0) and (fHistory.Items[fHistory.Count-1]=fLine) then begin
    OK:=false;
+   fHistoryIndex:=fHistory.Count;
   end;
   if OK then begin
    fHistory.Add(fLine);
