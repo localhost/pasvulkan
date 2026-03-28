@@ -149,7 +149,7 @@ void main() {
 #endif
 
   // Unified transform path — no more if(instanceIndex > 0u) branching.
-  // For pre-transformed meshes (mesh.comp output): modelMatrix = Identity → no-op.
+  // For pre-transformed meshes (mesh.comp output): modelMatrix = Identity => no-op.
   // For instanced meshes: modelMatrix = world transform.
   mat4 modelMatrix = drawInfo.modelMatrix;
 

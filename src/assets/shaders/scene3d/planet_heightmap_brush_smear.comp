@@ -53,7 +53,7 @@ layout(push_constant) uniform PushConstants {
 #include "planet_brushes.glsl"
 
 // Bilinear sample from the smear buffer (image2D) at a 3D unit-sphere direction.
-// Converts sphere direction → octahedral UV → texel coords, then does manual
+// Converts sphere direction => octahedral UV => texel coords, then does manual
 // bilinear interpolation with proper octahedral edge wrapping.
 float sampleSmearBufferAt(vec3 dir, ivec2 texSize) {
   vec2 uv = octPlanetUnsignedEncode(normalize(dir));

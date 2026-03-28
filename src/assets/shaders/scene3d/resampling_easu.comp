@@ -97,7 +97,7 @@ void accumulateEdgeInfo(
 }
 
 // Fetch a source texel using texelFetch, clamped to source dimensions, and apply tone mapping.
-// Applies tone mapping (HDR linear → [0,1] linear) followed by linear-to-sRGB conversion,
+// Applies tone mapping (HDR linear => [0,1] linear) followed by linear-to-sRGB conversion,
 // so that all filtering happens in perceptual sRGB space.
 vec4 fetchSource(ivec2 coordinate, ivec2 sourceSize) {
   coordinate = clamp(coordinate, ivec2(0), sourceSize - ivec2(1));
@@ -233,8 +233,8 @@ void main() {
   );
 
   // Adaptive negative lobe control.
-  // In flat areas (edgeAmount≈0), lobeStrength≈0.5 → deeper negative lobe → sharper.
-  // On strong edges (edgeAmount≈1), lobeStrength≈0.21 → shallower lobe → smoother.
+  // In flat areas (edgeAmount≈0), lobeStrength≈0.5 => deeper negative lobe => sharper.
+  // On strong edges (edgeAmount≈1), lobeStrength≈0.21 => shallower lobe => smoother.
   float lobeStrength = 0.5 - 0.29 * edgeAmount;
 
   // Maximum distance² before the tap is considered outside the kernel window.

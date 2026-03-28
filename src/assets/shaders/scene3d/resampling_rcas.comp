@@ -29,9 +29,9 @@ layout(set = 0, binding = 1, rgba16f) writeonly uniform image2D uDestinationText
 
 // Push constant for tunable sharpness.
 // sharpness: pre-computed on CPU as exp2(-stops) where stops is in AMD's convention:
-//   stops=0.0 → sharpness=1.0 (maximum sharpening)
-//   stops=1.0 → sharpness=0.5 (half sharpening)
-//   stops=2.0 → sharpness=0.25 (quarter sharpening)
+//   stops=0.0 => sharpness=1.0 (maximum sharpening)
+//   stops=1.0 => sharpness=0.5 (half sharpening)
+//   stops=2.0 => sharpness=0.25 (quarter sharpening)
 // Recommended default: exp2(-0.25) ≈ 0.84 (slight attenuation)
 layout(push_constant) uniform PushConstants {
   float sharpness;  // pre-computed: exp2(-stops), 1.0 = max, 0.0 = none
@@ -99,8 +99,8 @@ void main() {
   // A simple highpass filter: average of the 4 neighbors minus center.
   // If this is large relative to local contrast, we're looking at noise
   // rather than real detail, so we attenuate sharpening.
-  //   noiseFactor = 1.0 → no noise detected, sharpen fully
-  //   noiseFactor < 1.0 → noise detected, reduce sharpening
+  //   noiseFactor = 1.0 => no noise detected, sharpen fully
+  //   noiseFactor < 1.0 => noise detected, reduce sharpening
   // ------------------------------------------------------------------
 
   float lumaNorth  = computeLuma(north.rgb);

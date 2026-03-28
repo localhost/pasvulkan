@@ -1,10 +1,10 @@
 #version 450 core
 /*
- * cnn_buffer_to_image.comp — Convert flat SSBO (sRGB [0,1]) → output image (linear HDR)
+ * cnn_buffer_to_image.comp — Convert flat SSBO (sRGB [0,1]) => output image (linear HDR)
  *
  * Post-processing step for CNN upscaler inference.
  * Reads from a flat float SSBO in NCHW layout (3 channels, planar),
- * applies sRGB→linear conversion + inverse tone mapping, and writes
+ * applies sRGB=>linear conversion + inverse tone mapping, and writes
  * to a storage image (the full-resolution color target).
  *
  * Bindings:
@@ -67,7 +67,7 @@ void main() {
   // Clamp to valid range
   srgbColor = clamp(srgbColor, vec3(0.0), vec3(1.0));
 
-  // sRGB → linear (inverse of pre-processing)
+  // sRGB => linear (inverse of pre-processing)
   vec3 linearColor = convertSRGBToLinearRGB(srgbColor);
 
   // Apply inverse tone mapping (decompress back to HDR range)

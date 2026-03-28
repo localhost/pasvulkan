@@ -17561,7 +17561,7 @@ begin
 
  end;
 
- // HeightMap: SHADER_READ_ONLY_OPTIMAL → GENERAL
+ // HeightMap: SHADER_READ_ONLY_OPTIMAL => GENERAL
  ImageMemoryBarriers[0]:=TVkImageMemoryBarrier.Create(TVkAccessFlags(VK_ACCESS_SHADER_READ_BIT) or TVkAccessFlags(VK_ACCESS_SHADER_WRITE_BIT),
                                                       TVkAccessFlags(VK_ACCESS_SHADER_READ_BIT) or TVkAccessFlags(VK_ACCESS_SHADER_WRITE_BIT),
                                                       VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
@@ -17629,7 +17629,7 @@ begin
   fPlanet.fVulkanDevice.BreadcrumbBuffer.EndBreadcrumb(aCommandBuffer.Handle);
  end;
 
- // HeightMap back: GENERAL → SHADER_READ_ONLY_OPTIMAL
+ // HeightMap back: GENERAL => SHADER_READ_ONLY_OPTIMAL
  // SmearBuffer stays GENERAL
  ImageMemoryBarrier:=TVkImageMemoryBarrier.Create(TVkAccessFlags(VK_ACCESS_SHADER_READ_BIT) or TVkAccessFlags(VK_ACCESS_SHADER_WRITE_BIT),
                                                   TVkAccessFlags(VK_ACCESS_SHADER_READ_BIT) or TVkAccessFlags(VK_ACCESS_SHADER_WRITE_BIT),
@@ -30019,7 +30019,7 @@ begin
   exit;
  end;
 
- // HeightMap: SHADER_READ_ONLY_OPTIMAL → TRANSFER_SRC
+ // HeightMap: SHADER_READ_ONLY_OPTIMAL => TRANSFER_SRC
  SrcBarrier:=TVkImageMemoryBarrier.Create(TVkAccessFlags(VK_ACCESS_SHADER_READ_BIT) or TVkAccessFlags(VK_ACCESS_SHADER_WRITE_BIT),
                                           TVkAccessFlags(VK_ACCESS_TRANSFER_READ_BIT),
                                           VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
@@ -30029,7 +30029,7 @@ begin
                                           fData.fHeightMapImage.VulkanImage.Handle,
                                           TVkImageSubresourceRange.Create(TVkImageAspectFlags(VK_IMAGE_ASPECT_COLOR_BIT),0,1,0,1));
 
- // SmearBuffer: GENERAL → TRANSFER_DST
+ // SmearBuffer: GENERAL => TRANSFER_DST
  DstBarrier:=TVkImageMemoryBarrier.Create(TVkAccessFlags(VK_ACCESS_SHADER_READ_BIT) or TVkAccessFlags(VK_ACCESS_SHADER_WRITE_BIT),
                                           TVkAccessFlags(VK_ACCESS_TRANSFER_WRITE_BIT),
                                           VK_IMAGE_LAYOUT_GENERAL,
@@ -30068,7 +30068,7 @@ begin
                              VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                              1,@ImageCopy);
 
- // HeightMap back: TRANSFER_SRC → SHADER_READ_ONLY_OPTIMAL
+ // HeightMap back: TRANSFER_SRC => SHADER_READ_ONLY_OPTIMAL
  SrcBarrier:=TVkImageMemoryBarrier.Create(TVkAccessFlags(VK_ACCESS_TRANSFER_READ_BIT),
                                           TVkAccessFlags(VK_ACCESS_SHADER_READ_BIT) or TVkAccessFlags(VK_ACCESS_SHADER_WRITE_BIT),
                                           VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
@@ -30078,7 +30078,7 @@ begin
                                           fData.fHeightMapImage.VulkanImage.Handle,
                                           TVkImageSubresourceRange.Create(TVkImageAspectFlags(VK_IMAGE_ASPECT_COLOR_BIT),0,1,0,1));
 
- // SmearBuffer: TRANSFER_DST → GENERAL (stays GENERAL from here on)
+ // SmearBuffer: TRANSFER_DST => GENERAL (stays GENERAL from here on)
  DstBarrier:=TVkImageMemoryBarrier.Create(TVkAccessFlags(VK_ACCESS_TRANSFER_WRITE_BIT),
                                           TVkAccessFlags(VK_ACCESS_SHADER_READ_BIT) or TVkAccessFlags(VK_ACCESS_SHADER_WRITE_BIT),
                                           VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,

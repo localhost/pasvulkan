@@ -37,7 +37,7 @@ void main() {
     int total_weights = out_ch * in_ch * ks * ks;
     if (idx >= total_weights) return;
 
-    /* Decode linear index → (oc, ic, kh, kw) */
+    /* Decode linear index => (oc, ic, kh, kw) */
     int kw = idx % ks;
     int kh = (idx / ks) % ks;
     int ic = (idx / (ks * ks)) % in_ch;

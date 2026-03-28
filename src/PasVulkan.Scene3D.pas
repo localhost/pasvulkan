@@ -35763,7 +35763,7 @@ begin
 
          // Smart-Move defrag — use BufferRangeAllocator.Defragment with move callbacks
 
-         // Build reverse maps: Offset → GroupInstance for each allocator
+         // Build reverse maps: Offset => GroupInstance for each allocator
          fDefragVertexReverseMap.Clear;
          fDefragDrawIndexReverseMap.Clear;
          fDefragDrawUniqueIndexReverseMap.Clear;
@@ -35895,7 +35895,7 @@ begin
 
         end else begin
 
-         // Legacy path: Release-All → Realloc-All
+         // Legacy path: Release-All => Realloc-All
 
          // Release all data buffer range allocators
          for GroupInstance in fGroupInstances do begin

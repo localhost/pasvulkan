@@ -1,6 +1,6 @@
 #version 450
 /*
- * pixel_unshuffle.comp — Rearrange (N, C, H·r, W·r) → (N, C·r², H, W)
+ * pixel_unshuffle.comp — Rearrange (N, C, H·r, W·r) => (N, C·r², H, W)
  *
  * Used in backward pass to convert HR gradient to LR-space representation.
  *

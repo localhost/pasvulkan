@@ -1,6 +1,6 @@
 #version 450
 /*
- * pixel_shuffle.comp — Rearrange (N, C·r², H, W) → (N, C, H·r, W·r)
+ * pixel_shuffle.comp — Rearrange (N, C·r², H, W) => (N, C, H·r, W·r)
  *
  * Bindings: 0=input, 1=output, 2=(unused), 3=(unused)
  * Push constants: p0=r, p1=out_ch (C), p4=H (LR), p5=W (LR), p6=batch

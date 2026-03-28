@@ -1,6 +1,6 @@
 #version 450 core
 /*
- * cnn_pixel_shuffle.comp — Sub-pixel rearrangement (N, C·r², H, W) → (N, C, H·r, W·r)
+ * cnn_pixel_shuffle.comp — Sub-pixel rearrangement (N, C·r², H, W) => (N, C, H·r, W·r)
  *
  * Used for ESPCN CNN upscaler inference (final layer).
  * Operates on flat float SSBOs in NCHW layout.

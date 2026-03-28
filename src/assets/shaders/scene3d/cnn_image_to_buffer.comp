@@ -1,10 +1,10 @@
 #version 450 core
 /*
- * cnn_image_to_buffer.comp — Convert image (linear HDR) → flat SSBO (sRGB [0,1])
+ * cnn_image_to_buffer.comp — Convert image (linear HDR) => flat SSBO (sRGB [0,1])
  *
  * Pre-processing step for CNN upscaler inference.
  * Reads from a sampler2DArray (the scaled-resolution color target),
- * applies tone mapping + linear→sRGB conversion, and writes to a flat
+ * applies tone mapping + linear=>sRGB conversion, and writes to a flat
  * float SSBO in NCHW layout (3 channels, planar).
  *
  * Bindings:
@@ -57,10 +57,10 @@ void main() {
   // Read linear HDR texel
   vec4 color = texelFetch(uInputTexture, ivec3(x, y, viewIndex), 0);
 
-  // Apply tone mapping (compress HDR → LDR range for CNN input)
+  // Apply tone mapping (compress HDR => LDR range for CNN input)
   color.xyz = ApplyToneMapping(color.xyz);
 
-  // Linear → sRGB (the CNN was trained on sRGB data)
+  // Linear => sRGB (the CNN was trained on sRGB data)
   vec3 srgbColor = convertLinearRGBToSRGB(color.xyz);
 
   // Clamp to [0,1] range that the CNN expects
