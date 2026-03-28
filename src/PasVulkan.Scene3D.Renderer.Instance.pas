@@ -7381,6 +7381,7 @@ var TaskIndex,CountTasks,Index,Remain,ToDo,
     GPUDrawIndexedIndirectCommandDynamicArray:TpvScene3D.PGPUDrawIndexedIndirectCommandDynamicArray;
     GlobalRenderInstanceCullDataDynamicArray:TpvScene3D.PGlobalRenderInstanceCullDataDynamicArray;
 //  GlobalVulkanInstanceDataIndexDynamicArray:TpvScene3D.PGlobalVulkanInstanceDataIndexDynamicArray;
+    RenderInstanceInstanceDataIndex:TpvUInt32;
 begin
 
  if aFromIndex<=aToIndex then begin
@@ -7449,6 +7450,13 @@ begin
       GPUDrawIndexedIndirectCommand^.ObjectIndex:=TpvScene3D.TGroup.TInstance.TRenderInstance(GlobalRenderInstanceCullDataDynamicArray^.ItemArray[FirstInstanceID+InstanceIndex].RenderInstance).NodeCullObjectIDs[NodeIndex];
       GPUDrawIndexedIndirectCommand^.BoundingSphereIndex:=BoundingSphereIndex;
       GPUDrawIndexedIndirectCommand^.Flags:=0;
+      RenderInstanceInstanceDataIndex:=TpvScene3D.TGroup.TInstance.TRenderInstance(GlobalRenderInstanceCullDataDynamicArray^.ItemArray[FirstInstanceID+InstanceIndex].RenderInstance).InstanceDataIndex;
+      if (RenderInstanceInstanceDataIndex>0) and (RenderInstanceInstanceDataIndex<TpvUInt32(fScene3D.GPUInstanceDataDynamicArray.Count)) then begin
+       if (fScene3D.GPUInstanceDataDynamicArray.ItemArray[RenderInstanceInstanceDataIndex].Dissolve>0.0) or
+          (fScene3D.GPUInstanceDataDynamicArray.ItemArray[RenderInstanceInstanceDataIndex].DitheredTransparency>0.0) then begin
+        GPUDrawIndexedIndirectCommand^.Flags:=GPUDrawIndexedIndirectCommand^.Flags or (TpvUInt32(1) shl 1);
+       end;
+      end;
     //GPUDrawIndexedIndirectCommand^.InstanceDataIndex:=GlobalVulkanInstanceDataIndexDynamicArray^.ItemArray[FirstInstanceID+InstanceIndex];
      end;
 
