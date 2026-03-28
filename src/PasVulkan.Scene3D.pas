@@ -397,26 +397,48 @@ type EpvScene3D=class(Exception);
             TGlobalVulkanInstanceDataIndexDynamicArray=TpvDynamicArray<TpvUInt32>;
             PGlobalVulkanInstanceDataIndexDynamicArray=^TGlobalVulkanInstanceDataIndexDynamicArray;
             TGlobalVulkanInstanceDataIndexDynamicArrays=array[0..MaxInFlightFrames-1] of TGlobalVulkanInstanceDataIndexDynamicArray;
-            { TGPUDrawInfo - 192 bytes per draw command, stored in SSBO at binding 0 }
+            { TGPUGlobalBDAPointers - 48 bytes, single instance in SSBO at binding 7 }
+            { Contains the global buffer device addresses shared by all draws (big-buffer mode). }
+            { For future per-group buffers, these would move back into TGPUDrawInfo. }
+            TGPUGlobalBDAPointers=packed record
+             case boolean of
+              false:(
+               CachedVerticesDeviceAddress:TVkDeviceAddress;           //   8 =   8
+               StaticVerticesDeviceAddress:TVkDeviceAddress;           // + 8 =  16
+               PreviousCachedVerticesDeviceAddress:TVkDeviceAddress;   // + 8 =  24
+               GenerationDeviceAddress:TVkDeviceAddress;               // + 8 =  32
+               PreviousGenerationDeviceAddress:TVkDeviceAddress;       // + 8 =  40
+               Reserved:TVkDeviceAddress;                              // + 8 =  48
+              );
+              true:(
+               RawData:array[0..47] of TpvUInt8;
+              );
+            end;
+            PGPUGlobalBDAPointers=^TGPUGlobalBDAPointers;
+            TGlobalVulkanBDAPointersBuffers=array[0..MaxInFlightFrames-1] of TpvVulkanBuffer;
+            { TGPUDrawInfo - 144 bytes per draw command, stored in SSBO at binding 0 }
             { Layout must match the DrawInfo struct in drawinfo.glsl exactly (std430) }
+            { BDA pointers moved to TGPUGlobalBDAPointers at binding 7 (global for big-buffer mode) }
             TGPUDrawInfo=packed record
              case boolean of
               false:(
-               CachedVerticesDeviceAddress:TVkDeviceAddress;           //   8 =   8 (BDA to CachedVertex array)
-               StaticVerticesDeviceAddress:TVkDeviceAddress;           // + 8 =  16 (BDA to StaticVertex array)
-               PreviousCachedVerticesDeviceAddress:TVkDeviceAddress;   // + 8 =  24 (BDA to previous frame CachedVertex, velocity)
-               GenerationDeviceAddress:TVkDeviceAddress;               // + 8 =  32 (BDA to per-vertex generation, velocity)
-               PreviousGenerationDeviceAddress:TVkDeviceAddress;       // + 8 =  40 (BDA to previous frame generation, velocity)
-               Reserved:TVkDeviceAddress;                              // + 8 =  48 (padding for mat4 alignment)
-               ModelMatrix:TpvMatrix4x4;                               // +64 = 112 (world transform, Identity for pre-transformed)
-               PreviousModelMatrix:TpvMatrix4x4;                       // +64 = 176 (previous frame world transform, velocity)
-               InstanceDataIndex:TpvUInt32;                            // + 4 = 180
-               ObjectIndex:TpvUInt32;                                  // + 4 = 184
-               Flags:TpvUInt32;                                        // + 4 = 188
-               IndexOffset:TpvUInt32;                                  // + 4 = 192 (vertex index offset for per-group buffers, 0 for big-buffer)
+               // BDA pointers commented out — now in TGPUGlobalBDAPointers at binding 7
+               // For future per-group buffers, uncomment these and remove from TGPUGlobalBDAPointers
+               //CachedVerticesDeviceAddress:TVkDeviceAddress;           //   8 =   8 (BDA to CachedVertex array)
+               //StaticVerticesDeviceAddress:TVkDeviceAddress;           // + 8 =  16 (BDA to StaticVertex array)
+               //PreviousCachedVerticesDeviceAddress:TVkDeviceAddress;   // + 8 =  24 (BDA to previous frame CachedVertex, velocity)
+               //GenerationDeviceAddress:TVkDeviceAddress;               // + 8 =  32 (BDA to per-vertex generation, velocity)
+               //PreviousGenerationDeviceAddress:TVkDeviceAddress;       // + 8 =  40 (BDA to previous frame generation, velocity)
+               //Reserved:TVkDeviceAddress;                              // + 8 =  48 (padding for mat4 alignment)
+               ModelMatrix:TpvMatrix4x4;                               //  64 =  64 (world transform, Identity for pre-transformed)
+               PreviousModelMatrix:TpvMatrix4x4;                       // +64 = 128 (previous frame world transform, velocity)
+               InstanceDataIndex:TpvUInt32;                            // + 4 = 132
+               ObjectIndex:TpvUInt32;                                  // + 4 = 136
+               Flags:TpvUInt32;                                        // + 4 = 140
+               IndexOffset:TpvUInt32;                                  // + 4 = 144 (vertex index offset for per-group buffers, 0 for big-buffer)
               );                                                       //  ==   ==
-              true:(                                                   // 192  192 per draw
-               RawData:array[0..191] of TpvUInt8;
+              true:(                                                   // 144  144 per draw
+               RawData:array[0..143] of TpvUInt8;
               );
             end;
             PGPUDrawInfo=^TGPUDrawInfo;
@@ -4306,6 +4328,8 @@ type EpvScene3D=class(Exception);
        //fGlobalVulkanInstanceDataIndexBuffers:TGlobalVulkanInstanceDataIndexBuffers; // Dead: replaced by DrawInfo SSBO
        fGlobalVulkanDrawInfoDynamicArrays:TGlobalVulkanDrawInfoDynamicArrays;
        fGlobalVulkanDrawInfoBuffers:TGlobalVulkanDrawInfoBuffers;
+       fGlobalVulkanBDAPointersBuffers:TGlobalVulkanBDAPointersBuffers;
+       fGlobalVulkanBDAPointersData:array[0..MaxInFlightFrames-1] of TGPUGlobalBDAPointers;
        fGlobalVulkanDescriptorSetLayout:TpvVulkanDescriptorSetLayout;
        fGlobalVulkanDescriptorPool:TpvVulkanDescriptorPool;
        fGlobalVulkanDescriptorSets:TGlobalVulkanDescriptorSets;
@@ -34568,6 +34592,14 @@ begin
                                               TVkShaderStageFlags(VK_SHADER_STAGE_FRAGMENT_BIT) or
                                               TVkShaderStageFlags(VK_SHADER_STAGE_COMPUTE_BIT),
                                               []);}
+  // GlobalBDAPointers (binding 7) - global buffer device addresses for vertex pulling
+  fGlobalVulkanDescriptorSetLayout.AddBinding(7,
+                                              VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                                              1,
+                                              TVkShaderStageFlags(VK_SHADER_STAGE_VERTEX_BIT) or
+                                              TVkShaderStageFlags(VK_SHADER_STAGE_FRAGMENT_BIT) or
+                                              TVkShaderStageFlags(VK_SHADER_STAGE_COMPUTE_BIT),
+                                              []);
   // Raytracing (bindings 8-9 if active)
   if fRaytracingActive then begin
    fGlobalVulkanDescriptorSetLayout.AddBinding(8,
@@ -35122,6 +35154,7 @@ begin
  for Index:=0 to fCountInFlightFrames-1 do begin
   //FreeAndNil(fGlobalVulkanInstanceMatrixBuffers[Index]); // Dead: replaced by DrawInfo SSBO
   FreeAndNil(fGlobalVulkanDrawInfoBuffers[Index]);
+  FreeAndNil(fGlobalVulkanBDAPointersBuffers[Index]);
  end;
 
 {for Index:=0 to fCountInFlightFrames-1 do begin
@@ -36344,6 +36377,30 @@ begin
           end;
 
           for Index:=0 to fCountInFlightFrames-1 do begin
+           fGlobalVulkanBDAPointersBuffers[Index]:=TpvVulkanBuffer.Create(fVulkanDevice,
+                                                                          SizeOf(TGPUGlobalBDAPointers),
+                                                                          TVkBufferUsageFlags(VK_BUFFER_USAGE_TRANSFER_DST_BIT) or
+                                                                          TVkBufferUsageFlags(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT) or
+                                                                          TVkBufferUsageFlags(VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT_KHR),
+                                                                          TVkSharingMode(VK_SHARING_MODE_EXCLUSIVE),
+                                                                          [],
+                                                                          TVkMemoryPropertyFlags(VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT),
+                                                                          TVkMemoryPropertyFlags(VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) or TVkMemoryPropertyFlags(VK_MEMORY_PROPERTY_HOST_COHERENT_BIT),
+                                                                          0,
+                                                                          0,
+                                                                          0,
+                                                                          0,
+                                                                          0,
+                                                                          0,
+                                                                          [TpvVulkanBufferFlag.PersistentMapped],
+                                                                          0,
+                                                                          pvAllocationGroupIDScene3DDynamic,
+                                                                          'TpvScene3D.fGlobalVulkanBDAPointersBuffers['+IntToStr(Index)+']');
+           fVulkanDevice.DebugUtils.SetObjectName(fGlobalVulkanBDAPointersBuffers[Index].Handle,VK_OBJECT_TYPE_BUFFER,'TpvScene3D.fGlobalVulkanBDAPointersBuffers['+IntToStr(Index)+']');
+          end;
+
+
+          for Index:=0 to fCountInFlightFrames-1 do begin
            fVulkanDebugPrimitiveVertexBuffers[Index]:=TpvVulkanBuffer.Create(fVulkanDevice,
                                                                              SizeOf(TpvScene3D.TDebugPrimitiveVertex)*InitialCountDebugPrimitiveVertices,
                                                                              TVkBufferUsageFlags(VK_BUFFER_USAGE_TRANSFER_DST_BIT) or TVkBufferUsageFlags(VK_BUFFER_USAGE_VERTEX_BUFFER_BIT) or fAccelerationStructureInputBufferUsageFlags,
@@ -36516,6 +36573,30 @@ begin
                                                                         'TpvScene3D.fGlobalVulkanDrawInfoBuffers['+IntToStr(Index)+']');
            fVulkanDevice.DebugUtils.SetObjectName(fGlobalVulkanDrawInfoBuffers[Index].Handle,VK_OBJECT_TYPE_BUFFER,'TpvScene3D.fGlobalVulkanDrawInfoBuffers['+IntToStr(Index)+']');
           end;
+
+          for Index:=0 to fCountInFlightFrames-1 do begin
+           fGlobalVulkanBDAPointersBuffers[Index]:=TpvVulkanBuffer.Create(fVulkanDevice,
+                                                                          SizeOf(TGPUGlobalBDAPointers),
+                                                                          TVkBufferUsageFlags(VK_BUFFER_USAGE_TRANSFER_DST_BIT) or
+                                                                          TVkBufferUsageFlags(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT) or
+                                                                          TVkBufferUsageFlags(VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT_KHR),
+                                                                          TVkSharingMode(VK_SHARING_MODE_EXCLUSIVE),
+                                                                          [],
+                                                                          0,
+                                                                          TVkMemoryPropertyFlags(VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT),
+                                                                          0,
+                                                                          TVkMemoryPropertyFlags(VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT),
+                                                                          0,
+                                                                          0,
+                                                                          0,
+                                                                          0,
+                                                                          [TpvVulkanBufferFlag.OwnSingleMemoryChunk,TpvVulkanBufferFlag.DedicatedAllocation],
+                                                                          0,
+                                                                          pvAllocationGroupIDScene3DDynamic,
+                                                                          'TpvScene3D.fGlobalVulkanBDAPointersBuffers['+IntToStr(Index)+']');
+           fVulkanDevice.DebugUtils.SetObjectName(fGlobalVulkanBDAPointersBuffers[Index].Handle,VK_OBJECT_TYPE_BUFFER,'TpvScene3D.fGlobalVulkanBDAPointersBuffers['+IntToStr(Index)+']');
+          end;
+
 
           for Index:=0 to fCountInFlightFrames-1 do begin
            fVulkanDebugPrimitiveVertexBuffers[Index]:=TpvVulkanBuffer.Create(fVulkanDevice,
@@ -37092,6 +37173,15 @@ begin
                                                                  [fGlobalVulkanInstanceDataIndexBuffers[Index].DescriptorBufferInfo],
                                                                  [],
                                                                  false);}
+         // GlobalBDAPointers at binding 7
+         fGlobalVulkanDescriptorSets[Index].WriteToDescriptorSet(7,
+                                                                 0,
+                                                                 1,
+                                                                 TVkDescriptorType(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER),
+                                                                 [],
+                                                                 [fGlobalVulkanBDAPointersBuffers[Index].DescriptorBufferInfo],
+                                                                 [],
+                                                                 false);
          // Raytracing
          if fRaytracingActive then begin
           if assigned(fRaytracing.TopLevelAccelerationStructure) then begin
@@ -39604,7 +39694,7 @@ begin
 
    end;
 
-   // Fill BDA pointers in ALL DrawInfo entries (big-buffer: same BDA for all)
+   // Fill global BDA pointers (big-buffer: same addresses for all draws)
    begin
     DrawInfoBDACachedVertices:=0;
     DrawInfoBDAStaticVertices:=0;
@@ -39634,6 +39724,16 @@ begin
     end else if assigned(fVulkanShortTermDynamicBuffers.fBufferDataArray[aInFlightFrameIndex].fVulkanCachedVertexGenerationBuffer) then begin
      DrawInfoBDAPreviousGeneration:=fVulkanShortTermDynamicBuffers.fBufferDataArray[aInFlightFrameIndex].fVulkanCachedVertexGenerationBuffer.DeviceAddress;
     end;
+    // Fill the global BDA pointers struct (uploaded to binding 7 SSBO)
+    fGlobalVulkanBDAPointersData[aInFlightFrameIndex].CachedVerticesDeviceAddress:=DrawInfoBDACachedVertices;
+    fGlobalVulkanBDAPointersData[aInFlightFrameIndex].StaticVerticesDeviceAddress:=DrawInfoBDAStaticVertices;
+    fGlobalVulkanBDAPointersData[aInFlightFrameIndex].PreviousCachedVerticesDeviceAddress:=DrawInfoBDAPreviousCachedVertices;
+    fGlobalVulkanBDAPointersData[aInFlightFrameIndex].GenerationDeviceAddress:=DrawInfoBDAGeneration;
+    fGlobalVulkanBDAPointersData[aInFlightFrameIndex].PreviousGenerationDeviceAddress:=DrawInfoBDAPreviousGeneration;
+    fGlobalVulkanBDAPointersData[aInFlightFrameIndex].Reserved:=0;
+    // Per-DrawInfo BDA fill loop commented out — for future per-group buffers, uncomment this
+    // and remove the global BDA pointers buffer approach
+    (*
     for DrawInfoIndex:=0 to fGlobalVulkanDrawInfoDynamicArrays[aInFlightFrameIndex].Count-1 do begin
      CurrentDrawInfo:=@fGlobalVulkanDrawInfoDynamicArrays[aInFlightFrameIndex].ItemArray[DrawInfoIndex];
      CurrentDrawInfo^.CachedVerticesDeviceAddress:=DrawInfoBDACachedVertices;
@@ -39642,6 +39742,7 @@ begin
      CurrentDrawInfo^.GenerationDeviceAddress:=DrawInfoBDAGeneration;
      CurrentDrawInfo^.PreviousGenerationDeviceAddress:=DrawInfoBDAPreviousGeneration;
     end;
+    *)
    end;
 
    case fBufferStreamingMode of
@@ -39668,6 +39769,33 @@ begin
      Assert(false);
     end;
 
+   end;
+
+  end;
+
+  // Upload global BDA pointers to binding 7 SSBO (48 bytes, always)
+  case fBufferStreamingMode of
+
+   TBufferStreamingMode.Direct:begin
+    fGlobalVulkanBDAPointersBuffers[aInFlightFrameIndex].UpdateData(fGlobalVulkanBDAPointersData[aInFlightFrameIndex],
+                                                                    0,
+                                                                    SizeOf(TGPUGlobalBDAPointers),
+                                                                    FlushUpdateData
+                                                                   );
+   end;
+
+   TBufferStreamingMode.Staging:begin
+    fVulkanDevice.MemoryStaging.Upload(fVulkanStagingQueue,
+                                       fVulkanStagingCommandBuffer,
+                                       fVulkanStagingFence,
+                                       fGlobalVulkanBDAPointersData[aInFlightFrameIndex],
+                                       fGlobalVulkanBDAPointersBuffers[aInFlightFrameIndex],
+                                       0,
+                                       SizeOf(TGPUGlobalBDAPointers));
+   end;
+
+   else begin
+    Assert(false);
    end;
 
   end;

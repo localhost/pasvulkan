@@ -40,7 +40,9 @@ layout(buffer_reference, std430, buffer_reference_align = 4) readonly buffer Gen
   uint generations[];
 };
 
-// DrawInfo struct — 192 bytes per draw, stored in SSBO at binding 0
+// GlobalBDAPointers — 48 bytes, single instance in SSBO at binding 7
+// Contains the global buffer device addresses shared by all draws (big-buffer mode).
+// For future per-group buffers, these would move back into DrawInfo or become per-group.
 // Layout (std430):
 //   offset  0: cachedVerticesBDA          (uvec2, 8 bytes)
 //   offset  8: staticVerticesBDA          (uvec2, 8 bytes)
@@ -48,21 +50,37 @@ layout(buffer_reference, std430, buffer_reference_align = 4) readonly buffer Gen
 //   offset 24: generationBDA              (uvec2, 8 bytes, velocity)
 //   offset 32: previousGenerationBDA      (uvec2, 8 bytes, velocity)
 //   offset 40: _reserved                  (uvec2, 8 bytes, padding)
-//   offset 48: modelMatrix                (mat4, 64 bytes)
-//   offset 112: previousModelMatrix       (mat4, 64 bytes, velocity)
-//   offset 176: instanceDataIndex         (uint, 4 bytes)
-//   offset 180: objectIndex               (uint, 4 bytes)
-//   offset 184: flags                     (uint, 4 bytes)
-//   offset 188: indexOffset               (uint, 4 bytes, vertex index offset for per-group buffers)
-// Total: 192 bytes
+// Total: 48 bytes
 
-struct DrawInfo {
+struct GlobalBDAPointers {
   uvec2 cachedVerticesBDA;
   uvec2 staticVerticesBDA;
   uvec2 previousCachedVerticesBDA;
   uvec2 generationBDA;
   uvec2 previousGenerationBDA;
   uvec2 _reserved;
+};
+
+// DrawInfo struct — 144 bytes per draw, stored in SSBO at binding 0
+// BDA pointers moved to GlobalBDAPointers at binding 7 (global for big-buffer mode)
+// Layout (std430):
+//   offset  0: modelMatrix                (mat4, 64 bytes)
+//   offset 64: previousModelMatrix        (mat4, 64 bytes, velocity)
+//   offset 128: instanceDataIndex         (uint, 4 bytes)
+//   offset 132: objectIndex               (uint, 4 bytes)
+//   offset 136: flags                     (uint, 4 bytes)
+//   offset 140: indexOffset               (uint, 4 bytes, vertex index offset for per-group buffers)
+// Total: 144 bytes
+
+struct DrawInfo {
+  // BDA pointers commented out — now in GlobalBDAPointers at binding 7
+  // For future per-group buffers, uncomment these and remove from GlobalBDAPointers
+  //uvec2 cachedVerticesBDA;
+  //uvec2 staticVerticesBDA;
+  //uvec2 previousCachedVerticesBDA;
+  //uvec2 generationBDA;
+  //uvec2 previousGenerationBDA;
+  //uvec2 _reserved;
   mat4 modelMatrix;
   mat4 previousModelMatrix;
   uint instanceDataIndex;

@@ -156,6 +156,10 @@ layout(set = 0, binding = 6, std430) readonly buffer InstanceDataBuffer {
 //   uint instanceDataIndices[];
 // };
 
+layout(set = 0, binding = 7, std430) readonly buffer GlobalBDAPointersBuffer {
+  GlobalBDAPointers globalBDAPointers;
+};
+
 #ifdef RAYTRACING
 
 layout(buffer_reference, std430, buffer_reference_align = 8) readonly buffer ReferencedPlanetDataArray {

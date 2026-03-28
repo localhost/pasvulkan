@@ -50,6 +50,11 @@ layout(set = 0, binding = 0, std430) readonly buffer DrawInfoBuffer {
   DrawInfo drawInfoItems[];
 };
 
+// GlobalBDAPointers SSBO — global buffer device addresses for vertex pulling
+layout(set = 0, binding = 7, std430) readonly buffer GlobalBDAPointersBuffer {
+  GlobalBDAPointers globalBDAPointers;
+};
+
 // Global descriptor set
 
 struct View {
@@ -87,9 +92,9 @@ void main() {
   // Vertex index adjusted by per-group offset (0 for big-buffer, base vertex for per-group buffers)
   const uint vertexIndex = uint(gl_VertexIndex) - drawInfo.indexOffset;
 
-  // Fetch vertex data via BDA vertex pulling
-  CachedVertexBuffer cachedVerts = CachedVertexBuffer(drawInfo.cachedVerticesBDA);
-  StaticVertexBuffer staticVerts = StaticVertexBuffer(drawInfo.staticVerticesBDA);
+  // Fetch vertex data via BDA vertex pulling (BDA pointers from global SSBO at binding 7)
+  CachedVertexBuffer cachedVerts = CachedVertexBuffer(globalBDAPointers.cachedVerticesBDA);
+  StaticVertexBuffer staticVerts = StaticVertexBuffer(globalBDAPointers.staticVerticesBDA);
 
   PackedCachedVertex cv = cachedVerts.vertices[vertexIndex];
   PackedStaticVertex sv = staticVerts.vertices[vertexIndex];
@@ -105,10 +110,10 @@ void main() {
   uint materialID = sv.materialID;
 
 #ifdef VELOCITY
-  // Fetch previous frame vertex data and generation for motion vectors
-  CachedVertexBuffer prevCachedVerts = CachedVertexBuffer(drawInfo.previousCachedVerticesBDA);
-  GenerationBuffer genBuf = GenerationBuffer(drawInfo.generationBDA);
-  GenerationBuffer prevGenBuf = GenerationBuffer(drawInfo.previousGenerationBDA);
+  // Fetch previous frame vertex data and generation for motion vectors (BDA from global SSBO)
+  CachedVertexBuffer prevCachedVerts = CachedVertexBuffer(globalBDAPointers.previousCachedVerticesBDA);
+  GenerationBuffer genBuf = GenerationBuffer(globalBDAPointers.generationBDA);
+  GenerationBuffer prevGenBuf = GenerationBuffer(globalBDAPointers.previousGenerationBDA);
   vec3 previousPosition = unpackPosition(prevCachedVerts.vertices[vertexIndex]);
   uint generation = genBuf.generations[vertexIndex];
   uint previousGeneration = prevGenBuf.generations[vertexIndex];
