@@ -4301,9 +4301,9 @@ type EpvScene3D=class(Exception);
        fGlobalBoundingSphereVulkanDescriptorSets:TGlobalBoundingSphereVulkanDescriptorSets;
        fGlobalVulkanInstanceCounts:TGlobalVulkanInstanceCounts;
        fGlobalVulkanInstanceMatrixDynamicArrays:TGlobalVulkanInstanceMatrixDynamicArrays;
-       fGlobalVulkanInstanceMatrixBuffers:TGlobalVulkanInstanceMatrixBuffers;
+       //fGlobalVulkanInstanceMatrixBuffers:TGlobalVulkanInstanceMatrixBuffers; // Dead: replaced by DrawInfo SSBO
        fGlobalVulkanInstanceDataIndexDynamicArrays:TGlobalVulkanInstanceDataIndexDynamicArrays;
-       fGlobalVulkanInstanceDataIndexBuffers:TGlobalVulkanInstanceDataIndexBuffers;
+       //fGlobalVulkanInstanceDataIndexBuffers:TGlobalVulkanInstanceDataIndexBuffers; // Dead: replaced by DrawInfo SSBO
        fGlobalVulkanDrawInfoDynamicArrays:TGlobalVulkanDrawInfoDynamicArrays;
        fGlobalVulkanDrawInfoBuffers:TGlobalVulkanDrawInfoBuffers;
        fGlobalVulkanDescriptorSetLayout:TpvVulkanDescriptorSetLayout;
@@ -4783,7 +4783,7 @@ type EpvScene3D=class(Exception);
       public
        property BoundingBox:TpvAABB read fBoundingBox;
        property InFlightFrameBoundingBoxes:TInFlightFrameAABBs read fInFlightFrameBoundingBoxes;
-       property GlobalVulkanInstanceMatrixBuffers:TGlobalVulkanInstanceMatrixBuffers read fGlobalVulkanInstanceMatrixBuffers;
+       //property GlobalVulkanInstanceMatrixBuffers:TGlobalVulkanInstanceMatrixBuffers read fGlobalVulkanInstanceMatrixBuffers; // Dead: replaced by DrawInfo SSBO
        property GlobalVulkanDescriptorSets:TGlobalVulkanDescriptorSets read fGlobalVulkanDescriptorSets;
        property GlobalBoundingSphereVulkanDescriptorSets:TGlobalBoundingSphereVulkanDescriptorSets read fGlobalBoundingSphereVulkanDescriptorSets;
        property PrimaryLightDirection:TpvVector3 read fPrimaryLightDirection write fPrimaryLightDirection;
@@ -35120,7 +35120,7 @@ begin
  FreeAndNil(fGlobalVulkanDescriptorPool);
 
  for Index:=0 to fCountInFlightFrames-1 do begin
-  FreeAndNil(fGlobalVulkanInstanceMatrixBuffers[Index]);
+  //FreeAndNil(fGlobalVulkanInstanceMatrixBuffers[Index]); // Dead: replaced by DrawInfo SSBO
   FreeAndNil(fGlobalVulkanDrawInfoBuffers[Index]);
  end;
 
@@ -36297,6 +36297,7 @@ begin
 
           end;}
 
+          (* // Dead: replaced by DrawInfo SSBO
           for Index:=0 to fCountInFlightFrames-1 do begin
            fGlobalVulkanInstanceMatrixBuffers[Index]:=TpvVulkanBuffer.Create(fVulkanDevice,
                                                                              Max(1,length(fGlobalVulkanInstanceMatrixDynamicArrays[Index].Items))*SizeOf(TpvMatrix4x4),
@@ -36317,6 +36318,7 @@ begin
                                                                              'TpvScene3D.fGlobalVulkanInstanceMatrixBuffers['+IntToStr(Index)+']');
            fVulkanDevice.DebugUtils.SetObjectName(fGlobalVulkanInstanceMatrixBuffers[Index].Handle,VK_OBJECT_TYPE_BUFFER,'TpvScene3D.fGlobalVulkanInstanceMatrixBuffers['+IntToStr(Index)+']');
           end;
+          *)
 
           for Index:=0 to fCountInFlightFrames-1 do begin
            fGlobalVulkanDrawInfoBuffers[Index]:=TpvVulkanBuffer.Create(fVulkanDevice,
@@ -36469,6 +36471,7 @@ begin
 
           end;}
 
+          (* // Dead: replaced by DrawInfo SSBO
           for Index:=0 to fCountInFlightFrames-1 do begin
            fGlobalVulkanInstanceMatrixBuffers[Index]:=TpvVulkanBuffer.Create(fVulkanDevice,
                                                                              Max(1,length(fGlobalVulkanInstanceMatrixDynamicArrays[Index].Items))*SizeOf(TpvMatrix4x4),
@@ -36489,6 +36492,7 @@ begin
                                                                              'TpvScene3D.fGlobalVulkanInstanceMatrixBuffers['+IntToStr(Index)+']');
            fVulkanDevice.DebugUtils.SetObjectName(fGlobalVulkanInstanceMatrixBuffers[Index].Handle,VK_OBJECT_TYPE_BUFFER,'TpvScene3D.fGlobalVulkanInstanceMatrixBuffers['+IntToStr(Index)+']');
           end;
+          *)
 
           for Index:=0 to fCountInFlightFrames-1 do begin
            fGlobalVulkanDrawInfoBuffers[Index]:=TpvVulkanBuffer.Create(fVulkanDevice,
@@ -36898,6 +36902,7 @@ begin
 
              end;
 
+             (* // Dead: replaced by DrawInfo SSBO
              case fBufferStreamingMode of
 
               TBufferStreamingMode.Direct:begin
@@ -36970,6 +36975,7 @@ begin
               end;
 
              end;
+             *)
 
             end;
 
@@ -37206,7 +37212,7 @@ begin
 
       FreeAndNil(fVulkanGPUInstanceDataBuffers[Index]);
 
-      FreeAndNil(fGlobalVulkanInstanceDataIndexBuffers[Index]);
+      //FreeAndNil(fGlobalVulkanInstanceDataIndexBuffers[Index]); // Dead: replaced by DrawInfo SSBO
 
      end;
 
@@ -39314,6 +39320,7 @@ begin
 
   end;
 
+  (* // Dead: replaced by DrawInfo SSBO - InstanceDataIndex resize/update in ProcessFrame
   if fGlobalVulkanInstanceDataIndexDynamicArrays[aInFlightFrameIndex].Count>0 then begin
 
    if assigned(fGlobalVulkanInstanceDataIndexBuffers[aInFlightFrameIndex]) then begin
@@ -39377,14 +39384,14 @@ begin
 
      end;
 
-     {fGlobalVulkanDescriptorSets[aInFlightFrameIndex].WriteToDescriptorSet(7,
-                                                                           0,
-                                                                           1,
-                                                                           TVkDescriptorType(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER),
-                                                                           [],
-                                                                           [fGlobalVulkanInstanceDataIndexBuffers[aInFlightFrameIndex].DescriptorBufferInfo],
-                                                                           [],
-                                                                           true);}
+     //fGlobalVulkanDescriptorSets[aInFlightFrameIndex].WriteToDescriptorSet(7,
+     //                                                                      0,
+     //                                                                      1,
+     //                                                                      TVkDescriptorType(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER),
+     //                                                                      [],
+     //                                                                      [fGlobalVulkanInstanceDataIndexBuffers[aInFlightFrameIndex].DescriptorBufferInfo],
+     //                                                                      [],
+     //                                                                      true);
 
     end;
 
@@ -39417,7 +39424,9 @@ begin
    end;
 
   end;
+  *)
 
+  (* // Dead: replaced by DrawInfo SSBO - InstanceMatrix resize/update in ProcessFrame
   if fGlobalVulkanInstanceMatrixDynamicArrays[aInFlightFrameIndex].Count>0 then begin
 
    if assigned(fGlobalVulkanInstanceMatrixBuffers[aInFlightFrameIndex]) then begin
@@ -39478,14 +39487,14 @@ begin
      end;
 
      // InstanceMatrix binding 0 - REPLACED by DrawInfo at binding 0
-     {fGlobalVulkanDescriptorSets[aInFlightFrameIndex].WriteToDescriptorSet(0,
-                                                                           0,
-                                                                           1,
-                                                                           TVkDescriptorType(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER),
-                                                                           [],
-                                                                           [fGlobalVulkanInstanceMatrixBuffers[aInFlightFrameIndex].DescriptorBufferInfo],
-                                                                           [],
-                                                                           true);}
+     //fGlobalVulkanDescriptorSets[aInFlightFrameIndex].WriteToDescriptorSet(0,
+     //                                                                      0,
+     //                                                                      1,
+     //                                                                      TVkDescriptorType(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER),
+     //                                                                      [],
+     //                                                                      [fGlobalVulkanInstanceMatrixBuffers[aInFlightFrameIndex].DescriptorBufferInfo],
+     //                                                                      [],
+     //                                                                      true);
 
     end;
 
@@ -39518,6 +39527,7 @@ begin
    end;
 
   end;
+  *)
 
   // DrawInfo SSBO: per-frame buffer for BDA vertex pulling
   if fGlobalVulkanDrawInfoDynamicArrays[aInFlightFrameIndex].Count>0 then begin
