@@ -4171,6 +4171,10 @@ type EpvScene3D=class(Exception);
             TRaytracingGroupInstanceNodeHashMap=TpvHashMap<TpvUInt64,TRaytracingGroupInstanceNode>;
             { TRaytracingGroupInstanceNodeExistHashMap }
             TRaytracingGroupInstanceNodeExistHashMap=TpvHashMap<TpvUInt64,Boolean>;
+            { TDefragOffsetToGroupInstanceHashMap }
+            TDefragOffsetToGroupInstanceHashMap=TpvHashMap<TpvInt64,TpvScene3D.TGroup.TInstance>;
+            { TDefragAffectedInstancesHashMap }
+            TDefragAffectedInstancesHashMap=TpvHashMap<TpvScene3D.TGroup.TInstance,boolean>;
             { TRaytracingGroupInstanceNodeQueueItem }
             TRaytracingGroupInstanceNodeQueueItem=record
              private
@@ -4513,6 +4517,21 @@ type EpvScene3D=class(Exception);
        fSmartMoveDefrag:boolean;
        fSmartResize:boolean;
        fAllowBufferShrink:boolean;
+       fDefragVertexReverseMap:TDefragOffsetToGroupInstanceHashMap;
+       fDefragDrawIndexReverseMap:TDefragOffsetToGroupInstanceHashMap;
+       fDefragDrawUniqueIndexReverseMap:TDefragOffsetToGroupInstanceHashMap;
+       fDefragMorphTargetVertexReverseMap:TDefragOffsetToGroupInstanceHashMap;
+       fDefragJointBlockReverseMap:TDefragOffsetToGroupInstanceHashMap;
+       fDefragNodeMatricesReverseMap:TDefragOffsetToGroupInstanceHashMap;
+       fDefragMorphTargetWeightsReverseMap:TDefragOffsetToGroupInstanceHashMap;
+       fDefragAffectedInstances:TDefragAffectedInstancesHashMap;
+       procedure DefragMoveVertex(const aSender:TpvBufferRangeAllocator;const aOldOffset,aNewOffset,aSize:TpvInt64);
+       procedure DefragMoveDrawIndex(const aSender:TpvBufferRangeAllocator;const aOldOffset,aNewOffset,aSize:TpvInt64);
+       procedure DefragMoveDrawUniqueIndex(const aSender:TpvBufferRangeAllocator;const aOldOffset,aNewOffset,aSize:TpvInt64);
+       procedure DefragMoveMorphTargetVertex(const aSender:TpvBufferRangeAllocator;const aOldOffset,aNewOffset,aSize:TpvInt64);
+       procedure DefragMoveJointBlock(const aSender:TpvBufferRangeAllocator;const aOldOffset,aNewOffset,aSize:TpvInt64);
+       procedure DefragMoveNodeMatrices(const aSender:TpvBufferRangeAllocator;const aOldOffset,aNewOffset,aSize:TpvInt64);
+       procedure DefragMoveMorphTargetWeights(const aSender:TpvBufferRangeAllocator;const aOldOffset,aNewOffset,aSize:TpvInt64);
        function NeedDefragmentation(const aForceCheck:boolean):boolean;
        function Defragment(const aForce:boolean):boolean;
       public
@@ -33716,6 +33735,15 @@ begin
  fSmartResize:=true;
  fAllowBufferShrink:=false;
 
+ fDefragVertexReverseMap:=TDefragOffsetToGroupInstanceHashMap.Create(nil);
+ fDefragDrawIndexReverseMap:=TDefragOffsetToGroupInstanceHashMap.Create(nil);
+ fDefragDrawUniqueIndexReverseMap:=TDefragOffsetToGroupInstanceHashMap.Create(nil);
+ fDefragMorphTargetVertexReverseMap:=TDefragOffsetToGroupInstanceHashMap.Create(nil);
+ fDefragJointBlockReverseMap:=TDefragOffsetToGroupInstanceHashMap.Create(nil);
+ fDefragNodeMatricesReverseMap:=TDefragOffsetToGroupInstanceHashMap.Create(nil);
+ fDefragMorphTargetWeightsReverseMap:=TDefragOffsetToGroupInstanceHashMap.Create(nil);
+ fDefragAffectedInstances:=TDefragAffectedInstancesHashMap.Create(false);
+
  fDirectedAcyclicGraphGeneration:=0;
 
  fLastDirectedAcyclicGraphGeneration:=0;
@@ -35460,6 +35488,15 @@ begin
 
  FreeAndNil(fVulkanMorphTargetVertexWeightsBufferRangeAllocator);
 
+ FreeAndNil(fDefragVertexReverseMap);
+ FreeAndNil(fDefragDrawIndexReverseMap);
+ FreeAndNil(fDefragDrawUniqueIndexReverseMap);
+ FreeAndNil(fDefragMorphTargetVertexReverseMap);
+ FreeAndNil(fDefragJointBlockReverseMap);
+ FreeAndNil(fDefragNodeMatricesReverseMap);
+ FreeAndNil(fDefragMorphTargetWeightsReverseMap);
+ FreeAndNil(fDefragAffectedInstances);
+
  FreeAndNil(fVulkanShortTermDynamicBuffers);
 
  FreeAndNil(fVulkanLongTermStaticBuffers);
@@ -35564,12 +35601,89 @@ begin
  fVulkanJointBlockBufferData.Resize(fInitialCountJointBlocks);
 end;
 
+procedure TpvScene3D.DefragMoveVertex(const aSender:TpvBufferRangeAllocator;const aOldOffset,aNewOffset,aSize:TpvInt64);
+var GroupInstance:TpvScene3D.TGroup.TInstance;
+begin
+ if fDefragVertexReverseMap.TryGet(aOldOffset,GroupInstance) then begin
+  System.Move(fVulkanDynamicVertexBufferData.Items[aOldOffset],fVulkanDynamicVertexBufferData.Items[aNewOffset],aSize*TpvInt64(SizeOf(TGPUDynamicVertex)));
+  System.Move(fVulkanStaticVertexBufferData.Items[aOldOffset],fVulkanStaticVertexBufferData.Items[aNewOffset],aSize*TpvInt64(SizeOf(TGPUStaticVertex)));
+  GroupInstance.fBufferRanges.VulkanVertexBufferRange.Offset:=aNewOffset;
+  fDefragAffectedInstances.Add(GroupInstance,true);
+ end;
+end;
+
+procedure TpvScene3D.DefragMoveDrawIndex(const aSender:TpvBufferRangeAllocator;const aOldOffset,aNewOffset,aSize:TpvInt64);
+var GroupInstance:TpvScene3D.TGroup.TInstance;
+begin
+ if fDefragDrawIndexReverseMap.TryGet(aOldOffset,GroupInstance) then begin
+  System.Move(fVulkanDrawIndexBufferData.Items[aOldOffset],fVulkanDrawIndexBufferData.Items[aNewOffset],aSize*TpvInt64(SizeOf(TVkUInt32)));
+  GroupInstance.fBufferRanges.VulkanDrawIndexBufferRange.Offset:=aNewOffset;
+  fDefragAffectedInstances.Add(GroupInstance,true);
+ end;
+end;
+
+procedure TpvScene3D.DefragMoveDrawUniqueIndex(const aSender:TpvBufferRangeAllocator;const aOldOffset,aNewOffset,aSize:TpvInt64);
+var GroupInstance:TpvScene3D.TGroup.TInstance;
+begin
+ if fDefragDrawUniqueIndexReverseMap.TryGet(aOldOffset,GroupInstance) then begin
+  System.Move(fVulkanDrawUniqueIndexBufferData.Items[aOldOffset],fVulkanDrawUniqueIndexBufferData.Items[aNewOffset],aSize*TpvInt64(SizeOf(TVkUInt32)));
+  GroupInstance.fBufferRanges.VulkanDrawUniqueIndexBufferRange.Offset:=aNewOffset;
+  fDefragAffectedInstances.Add(GroupInstance,true);
+ end;
+end;
+
+procedure TpvScene3D.DefragMoveMorphTargetVertex(const aSender:TpvBufferRangeAllocator;const aOldOffset,aNewOffset,aSize:TpvInt64);
+var GroupInstance:TpvScene3D.TGroup.TInstance;
+begin
+ if fDefragMorphTargetVertexReverseMap.TryGet(aOldOffset,GroupInstance) then begin
+  System.Move(fVulkanMorphTargetVertexBufferData.Items[aOldOffset],fVulkanMorphTargetVertexBufferData.Items[aNewOffset],aSize*TpvInt64(SizeOf(TMorphTargetVertex)));
+  GroupInstance.fBufferRanges.VulkanMorphTargetVertexBufferRange.Offset:=aNewOffset;
+  fDefragAffectedInstances.Add(GroupInstance,true);
+ end;
+end;
+
+procedure TpvScene3D.DefragMoveJointBlock(const aSender:TpvBufferRangeAllocator;const aOldOffset,aNewOffset,aSize:TpvInt64);
+var GroupInstance:TpvScene3D.TGroup.TInstance;
+begin
+ if fDefragJointBlockReverseMap.TryGet(aOldOffset,GroupInstance) then begin
+  System.Move(fVulkanJointBlockBufferData.Items[aOldOffset],fVulkanJointBlockBufferData.Items[aNewOffset],aSize*TpvInt64(SizeOf(TJointBlock)));
+  GroupInstance.fBufferRanges.VulkanJointBlockBufferRange.Offset:=aNewOffset;
+  fDefragAffectedInstances.Add(GroupInstance,true);
+ end;
+end;
+
+procedure TpvScene3D.DefragMoveNodeMatrices(const aSender:TpvBufferRangeAllocator;const aOldOffset,aNewOffset,aSize:TpvInt64);
+var GroupInstance:TpvScene3D.TGroup.TInstance;
+    InFlightFrameIndex:TpvSizeInt;
+begin
+ if fDefragNodeMatricesReverseMap.TryGet(aOldOffset,GroupInstance) then begin
+  for InFlightFrameIndex:=0 to fCountInFlightFrames-1 do begin
+   System.Move(fVulkanNodeMatricesBufferData[InFlightFrameIndex].Items[aOldOffset],fVulkanNodeMatricesBufferData[InFlightFrameIndex].Items[aNewOffset],aSize*TpvInt64(SizeOf(TpvMatrix4x4)));
+  end;
+  GroupInstance.fBufferRanges.VulkanNodeMatricesBufferRange.Offset:=aNewOffset;
+  fDefragAffectedInstances.Add(GroupInstance,true);
+ end;
+end;
+
+procedure TpvScene3D.DefragMoveMorphTargetWeights(const aSender:TpvBufferRangeAllocator;const aOldOffset,aNewOffset,aSize:TpvInt64);
+var GroupInstance:TpvScene3D.TGroup.TInstance;
+    InFlightFrameIndex:TpvSizeInt;
+begin
+ if fDefragMorphTargetWeightsReverseMap.TryGet(aOldOffset,GroupInstance) then begin
+  for InFlightFrameIndex:=0 to fCountInFlightFrames-1 do begin
+   System.Move(fVulkanMorphTargetVertexWeightsBufferData[InFlightFrameIndex].Items[aOldOffset],fVulkanMorphTargetVertexWeightsBufferData[InFlightFrameIndex].Items[aNewOffset],aSize*TpvInt64(SizeOf(TpvFloat)));
+  end;
+  GroupInstance.fBufferRanges.VulkanMorphTargetVertexWeightsBufferRange.Offset:=aNewOffset;
+  fDefragAffectedInstances.Add(GroupInstance,true);
+ end;
+end;
+
 function TpvScene3D.NeedDefragmentation(const aForceCheck:boolean):boolean;
 const Threshold=0.75;
 
  function AllocatorNeedsDefrag(const aAllocator:TpvBufferRangeAllocator):boolean;
  begin
-  // Quick pre-checks (D.1): skip expensive CalculateFragmentationFactor when defrag is pointless
+  // Quick pre-checks: skip expensive CalculateFragmentationFactor when defrag is pointless
   if (aAllocator.Capacity-aAllocator.Allocated)<=0 then begin
    // No free space at all — defrag cannot recover anything, resize needed
    result:=false;
@@ -35598,7 +35712,26 @@ begin
 end;
 
 function TpvScene3D.Defragment(const aForce:boolean):boolean;
+const Threshold=0.75;
 var GroupInstance:TpvScene3D.TGroup.TInstance;
+    Index:TpvSizeInt;
+    Node:TpvScene3D.TGroup.TNode;
+    InstanceNode:TpvScene3D.TGroup.TInstance.TNode;
+    AnyMoved:boolean;
+
+ function AllocatorNeedsDefrag(const aAllocator:TpvBufferRangeAllocator):boolean;
+ begin
+  if aForce then begin
+   result:=aAllocator.FragmentCount>1;
+  end else if (aAllocator.Capacity-aAllocator.Allocated)<=0 then begin
+   result:=false;
+  end else if aAllocator.FragmentCount<=1 then begin
+   result:=false;
+  end else begin
+   result:=aAllocator.CalculateFragmentationFactor>=Threshold;
+  end;
+ end;
+
 begin
 
  if not TPasMPInterlocked.CompareExchange(fInDefragment,true,false) then begin
@@ -35626,18 +35759,169 @@ begin
        fBufferRangeAllocatorLock.Acquire;
        try
 
-        // Release all data buffer range allocators
-        for GroupInstance in fGroupInstances do begin
-         if GroupInstance.fGroup.Usable and (not (GroupInstance.fHeadless or GroupInstance.fVirtual)) then begin
-          GroupInstance.ReleaseDataForReallocation;
+        if fSmartMoveDefrag then begin
+
+         // Smart-Move defrag — use BufferRangeAllocator.Defragment with move callbacks
+
+         // Build reverse maps: Offset → GroupInstance for each allocator
+         fDefragVertexReverseMap.Clear;
+         fDefragDrawIndexReverseMap.Clear;
+         fDefragDrawUniqueIndexReverseMap.Clear;
+         fDefragMorphTargetVertexReverseMap.Clear;
+         fDefragJointBlockReverseMap.Clear;
+         fDefragNodeMatricesReverseMap.Clear;
+         fDefragMorphTargetWeightsReverseMap.Clear;
+         fDefragAffectedInstances.Clear;
+
+         for GroupInstance in fGroupInstances do begin
+          if GroupInstance.fGroup.Usable and (not (GroupInstance.fHeadless or GroupInstance.fVirtual)) then begin
+           if GroupInstance.fBufferRanges.VulkanVertexBufferRange.Offset>=0 then begin
+            fDefragVertexReverseMap.Add(GroupInstance.fBufferRanges.VulkanVertexBufferRange.Offset,GroupInstance);
+           end;
+           if GroupInstance.fBufferRanges.VulkanDrawIndexBufferRange.Offset>=0 then begin
+            fDefragDrawIndexReverseMap.Add(GroupInstance.fBufferRanges.VulkanDrawIndexBufferRange.Offset,GroupInstance);
+           end;
+           if GroupInstance.fBufferRanges.VulkanDrawUniqueIndexBufferRange.Offset>=0 then begin
+            fDefragDrawUniqueIndexReverseMap.Add(GroupInstance.fBufferRanges.VulkanDrawUniqueIndexBufferRange.Offset,GroupInstance);
+           end;
+           if GroupInstance.fBufferRanges.VulkanMorphTargetVertexBufferRange.Offset>=0 then begin
+            fDefragMorphTargetVertexReverseMap.Add(GroupInstance.fBufferRanges.VulkanMorphTargetVertexBufferRange.Offset,GroupInstance);
+           end;
+           if GroupInstance.fBufferRanges.VulkanJointBlockBufferRange.Offset>=0 then begin
+            fDefragJointBlockReverseMap.Add(GroupInstance.fBufferRanges.VulkanJointBlockBufferRange.Offset,GroupInstance);
+           end;
+           if GroupInstance.fBufferRanges.VulkanNodeMatricesBufferRange.Offset>=0 then begin
+            fDefragNodeMatricesReverseMap.Add(GroupInstance.fBufferRanges.VulkanNodeMatricesBufferRange.Offset,GroupInstance);
+           end;
+           if GroupInstance.fBufferRanges.VulkanMorphTargetVertexWeightsBufferRange.Offset>=0 then begin
+            fDefragMorphTargetWeightsReverseMap.Add(GroupInstance.fBufferRanges.VulkanMorphTargetVertexWeightsBufferRange.Offset,GroupInstance);
+           end;
+          end;
          end;
+
+         // Run compaction only on allocators that actually need it
+         if AllocatorNeedsDefrag(fVulkanVertexBufferRangeAllocator) then begin
+          fVulkanVertexBufferRangeAllocator.Defragment(DefragMoveVertex);
+         end;
+         if AllocatorNeedsDefrag(fVulkanDrawIndexBufferRangeAllocator) then begin
+          fVulkanDrawIndexBufferRangeAllocator.Defragment(DefragMoveDrawIndex);
+         end;
+         if AllocatorNeedsDefrag(fVulkanDrawUniqueIndexBufferRangeAllocator) then begin
+          fVulkanDrawUniqueIndexBufferRangeAllocator.Defragment(DefragMoveDrawUniqueIndex);
+         end;
+         if AllocatorNeedsDefrag(fVulkanMorphTargetVertexBufferRangeAllocator) then begin
+          fVulkanMorphTargetVertexBufferRangeAllocator.Defragment(DefragMoveMorphTargetVertex);
+         end;
+         if AllocatorNeedsDefrag(fVulkanJointBlockBufferRangeAllocator) then begin
+          fVulkanJointBlockBufferRangeAllocator.Defragment(DefragMoveJointBlock);
+         end;
+         if AllocatorNeedsDefrag(fVulkanNodeMatricesBufferRangeAllocator) then begin
+          fVulkanNodeMatricesBufferRangeAllocator.Defragment(DefragMoveNodeMatrices);
+         end;
+         if AllocatorNeedsDefrag(fVulkanMorphTargetVertexWeightsBufferRangeAllocator) then begin
+          fVulkanMorphTargetVertexWeightsBufferRangeAllocator.Defragment(DefragMoveMorphTargetWeights);
+         end;
+
+         // Rebuild cross-referenced data and do fixups for all affected instances
+         for GroupInstance in fGroupInstances do begin
+          if fDefragAffectedInstances.ExistKey(GroupInstance) then begin
+
+           // ConstructData rebuilds vertex/index/morph data with correct cross-reference offsets
+           GroupInstance.ConstructData(false);
+
+           // Raytracing: remove old BLAS nodes, re-add after
+           if fRaytracingActive then begin
+            for Index:=0 to GroupInstance.fNodes.Count-1 do begin
+             InstanceNode:=GroupInstance.fNodes.RawItems[Index];
+             if InstanceNode.fRaytracingGroupInstanceNodeID>0 then begin
+              fRaytracingGroupInstanceNodeRemoveQueue.Enqueue(TRaytracingGroupInstanceNodeQueueItem.Create(GroupInstance,Index,InstanceNode.fRaytracingGroupInstanceNodeID));
+              fRaytracingGroupInstanceNodeExistHashMap.Delete(InstanceNode.fRaytracingGroupInstanceNodeID);
+             end;
+            end;
+           end;
+
+           // DrawChoreography fixup
+           if assigned(GroupInstance.fScenes) then begin
+            for Index:=0 to Min(GroupInstance.fScenes.Count,GroupInstance.fGroup.fScenes.Count)-1 do begin
+             GroupInstance.fScenes[Index].FixUp;
+            end;
+           end;
+
+           if assigned(GroupInstance.fDrawChoreographyBatchItems) then begin
+            GroupInstance.fDrawChoreographyBatchItems.GroupInstanceFixup(GroupInstance.fGroup.fDrawChoreographyBatchItems,GroupInstance,false);
+           end;
+
+           if assigned(GroupInstance.fDrawChoreographyBatchUniqueItems) then begin
+            GroupInstance.fDrawChoreographyBatchUniqueItems.GroupInstanceFixup(GroupInstance.fGroup.fDrawChoreographyBatchUniqueItems,GroupInstance,true);
+           end;
+
+           // Mark as new instance so buffers get re-uploaded
+           if assigned(GroupInstance.fScenes) then begin
+            fNewInstanceListLock.Acquire;
+            try
+             fNewInstances.Add(GroupInstance);
+            finally
+             fNewInstanceListLock.Release;
+            end;
+            TPasMPInterlocked.Write(GroupInstance.fIsNewInstance,TPasMPBool32(true));
+           end;
+
+           // Raytracing: re-add BLAS nodes
+           if fRaytracingActive then begin
+            for Index:=0 to GroupInstance.fGroup.fNodes.Count-1 do begin
+             Node:=GroupInstance.fGroup.fNodes[Index];
+             InstanceNode:=GroupInstance.fNodes.RawItems[Index];
+             if assigned(Node.Mesh) and (Node.Mesh.fRaytracingPrimitives.Count>0) then begin
+              InstanceNode.fRaytracingGroupInstanceNodeID:=fRaytracingGroupInstanceNodeIDCounter+1;
+              inc(fRaytracingGroupInstanceNodeIDCounter);
+              fRaytracingGroupInstanceNodeExistHashMap.Add(InstanceNode.fRaytracingGroupInstanceNodeID,true);
+              fRaytracingGroupInstanceNodeAddQueue.Enqueue(TRaytracingGroupInstanceNodeQueueItem.Create(GroupInstance,Index,InstanceNode.fRaytracingGroupInstanceNodeID));
+             end;
+            end;
+           end;
+
+          end;
+         end;
+
+         // Clear temporary maps
+         fDefragVertexReverseMap.Clear;
+         fDefragDrawIndexReverseMap.Clear;
+         fDefragDrawUniqueIndexReverseMap.Clear;
+         fDefragMorphTargetVertexReverseMap.Clear;
+         fDefragJointBlockReverseMap.Clear;
+         fDefragNodeMatricesReverseMap.Clear;
+         fDefragMorphTargetWeightsReverseMap.Clear;
+         fDefragAffectedInstances.Clear;
+
+        end else begin
+
+         // Legacy path: Release-All → Realloc-All
+
+         // Release all data buffer range allocators
+         for GroupInstance in fGroupInstances do begin
+          if GroupInstance.fGroup.Usable and (not (GroupInstance.fHeadless or GroupInstance.fVirtual)) then begin
+           GroupInstance.ReleaseDataForReallocation;
+          end;
+         end;
+
+         // Reallocation of all data buffer range allocators without fragmentation
+         for GroupInstance in fGroupInstances do begin
+          if GroupInstance.fGroup.Usable and (not (GroupInstance.fHeadless or GroupInstance.fVirtual)) then begin
+           GroupInstance.ReallocateData;
+          end;
+         end;
+
         end;
 
-        // Reallocation of all data buffer range allocators without fragmentation
-        for GroupInstance in fGroupInstances do begin
-         if GroupInstance.fGroup.Usable and (not (GroupInstance.fHeadless or GroupInstance.fVirtual)) then begin
-          GroupInstance.ReallocateData;
-         end;
+        // Optional buffer shrink after defrag
+        if fAllowBufferShrink then begin
+         fVulkanVertexBufferRangeAllocator.ShrinkToFit;
+         fVulkanDrawIndexBufferRangeAllocator.ShrinkToFit;
+         fVulkanDrawUniqueIndexBufferRangeAllocator.ShrinkToFit;
+         fVulkanMorphTargetVertexBufferRangeAllocator.ShrinkToFit;
+         fVulkanJointBlockBufferRangeAllocator.ShrinkToFit;
+         fVulkanNodeMatricesBufferRangeAllocator.ShrinkToFit;
+         fVulkanMorphTargetVertexWeightsBufferRangeAllocator.ShrinkToFit;
         end;
 
        finally

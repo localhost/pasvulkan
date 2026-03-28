@@ -133,6 +133,7 @@ type { TpvBufferRangeAllocator }
        procedure ReleaseBufferRangeAndNil(var aBufferRange:TBufferRange);
        function CalculateFragmentationFactor:TpvDouble;
        function Defragment(const aMove:TOnDefragmentMove):Boolean;
+       function ShrinkToFit:boolean;
       published
        property Allocated:TpvInt64 read fAllocated;
        property Capacity:TpvInt64 read fCapacity;
@@ -626,6 +627,32 @@ begin
   fLock.Release;
  end;
 
+end;
+
+function TpvBufferRangeAllocator.ShrinkToFit:boolean;
+var Node:TRangeRedBlackTree.TNode;
+    NewCapacity:TpvInt64;
+begin
+ result:=false;
+ fLock.Acquire;
+ try
+  if fAllocated<fCapacity then begin
+   // Find and remove trailing free block, then set capacity to allocated
+   Node:=fOffsetRedBlackTree.RightMost;
+   if assigned(Node) and assigned(Node.Value) and (Node.Value.fAllocationType=TpvBufferRangeAllocator.TRange.TAllocationType.Free) then begin
+    NewCapacity:=Node.Value.fOffset;
+    Node.Value.Free;
+    dec(fFragmentCount);
+    fCapacity:=NewCapacity;
+    result:=true;
+    if assigned(fOnResize) then begin
+     fOnResize(self,fCapacity);
+    end;
+   end;
+  end;
+ finally
+  fLock.Release;
+ end;
 end;
 
 end.
