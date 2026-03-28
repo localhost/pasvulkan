@@ -4509,6 +4509,10 @@ type EpvScene3D=class(Exception);
        fInDefragment:TPasMPBool32;
        fDefragmentationDataCheckGeneration:TpvUInt64;
        fDataGeneration:TpvUInt64;
+       fBuddyModeAllocation:boolean;
+       fSmartMoveDefrag:boolean;
+       fSmartResize:boolean;
+       fAllowBufferShrink:boolean;
        function NeedDefragmentation(const aForceCheck:boolean):boolean;
        function Defragment(const aForce:boolean):boolean;
       public
@@ -4944,6 +4948,10 @@ type EpvScene3D=class(Exception);
        property GlobalBoundingSphereVulkanDescriptorSetLayout:TpvVulkanDescriptorSetLayout read fGlobalBoundingSphereVulkanDescriptorSetLayout;
        property HasTransmission:boolean read fHasTransmission;
        property UseBufferDeviceAddress:boolean read fUseBufferDeviceAddress write fUseBufferDeviceAddress;
+       property BuddyModeAllocation:boolean read fBuddyModeAllocation write fBuddyModeAllocation;
+       property SmartMoveDefrag:boolean read fSmartMoveDefrag write fSmartMoveDefrag;
+       property SmartResize:boolean read fSmartResize write fSmartResize;
+       property AllowBufferShrink:boolean read fAllowBufferShrink write fAllowBufferShrink;
        property CountInFlightFrames:TpvSizeInt read fCountInFlightFrames;
        property BufferStreamingMode:TBufferStreamingMode read fBufferStreamingMode write fBufferStreamingMode;
        property MultiDrawSupport:boolean read fMultiDrawSupport;
@@ -33703,6 +33711,11 @@ begin
 
  fDataGeneration:=0;
 
+ fBuddyModeAllocation:=false;
+ fSmartMoveDefrag:=true;
+ fSmartResize:=true;
+ fAllowBufferShrink:=false;
+
  fDirectedAcyclicGraphGeneration:=0;
 
  fLastDirectedAcyclicGraphGeneration:=0;
@@ -33956,6 +33969,15 @@ begin
  fVulkanNodeMatricesBufferRangeAllocator:=TpvBufferRangeAllocator.Create;
 
  fVulkanMorphTargetVertexWeightsBufferRangeAllocator:=TpvBufferRangeAllocator.Create;
+
+ fVulkanVertexBufferRangeAllocator.AutomaticSizeAlignment:=fBuddyModeAllocation;
+//fVulkanIndexBufferRangeAllocator.AutomaticSizeAlignment:=fBuddyModeAllocation;
+ fVulkanDrawIndexBufferRangeAllocator.AutomaticSizeAlignment:=fBuddyModeAllocation;
+ fVulkanDrawUniqueIndexBufferRangeAllocator.AutomaticSizeAlignment:=fBuddyModeAllocation;
+ fVulkanMorphTargetVertexBufferRangeAllocator.AutomaticSizeAlignment:=fBuddyModeAllocation;
+ fVulkanJointBlockBufferRangeAllocator.AutomaticSizeAlignment:=fBuddyModeAllocation;
+ fVulkanNodeMatricesBufferRangeAllocator.AutomaticSizeAlignment:=fBuddyModeAllocation;
+ fVulkanMorphTargetVertexWeightsBufferRangeAllocator.AutomaticSizeAlignment:=fBuddyModeAllocation;
 
  fVulkanLongTermStaticBuffers:=TpvScene3D.TVulkanLongTermStaticBuffers.Create(self);
 
@@ -35544,17 +35566,32 @@ end;
 
 function TpvScene3D.NeedDefragmentation(const aForceCheck:boolean):boolean;
 const Threshold=0.75;
+
+ function AllocatorNeedsDefrag(const aAllocator:TpvBufferRangeAllocator):boolean;
+ begin
+  // Quick pre-checks (D.1): skip expensive CalculateFragmentationFactor when defrag is pointless
+  if (aAllocator.Capacity-aAllocator.Allocated)<=0 then begin
+   // No free space at all — defrag cannot recover anything, resize needed
+   result:=false;
+  end else if aAllocator.FragmentCount<=1 then begin
+   // Zero or one free block — already compact or single trailing free block
+   result:=false;
+  end else begin
+   result:=aAllocator.CalculateFragmentationFactor>=Threshold;
+  end;
+ end;
+
 begin
  if aForceCheck or (fDefragmentationDataCheckGeneration<>fDataGeneration) then begin
   fDefragmentationDataCheckGeneration:=fDataGeneration;
-  result:=(fVulkanVertexBufferRangeAllocator.CalculateFragmentationFactor>=Threshold) or
- //       (fVulkanIndexBufferRangeAllocator.CalculateFragmentationFactor>=Threshold) or
-          (fVulkanDrawIndexBufferRangeAllocator.CalculateFragmentationFactor>=Threshold) or
-          (fVulkanDrawUniqueIndexBufferRangeAllocator.CalculateFragmentationFactor>=Threshold) or
-          (fVulkanMorphTargetVertexBufferRangeAllocator.CalculateFragmentationFactor>=Threshold) or
-          (fVulkanJointBlockBufferRangeAllocator.CalculateFragmentationFactor>=Threshold) or
-          (fVulkanNodeMatricesBufferRangeAllocator.CalculateFragmentationFactor>=Threshold) or
-          (fVulkanMorphTargetVertexWeightsBufferRangeAllocator.CalculateFragmentationFactor>=Threshold);
+  result:=AllocatorNeedsDefrag(fVulkanVertexBufferRangeAllocator) or
+ //       AllocatorNeedsDefrag(fVulkanIndexBufferRangeAllocator) or
+          AllocatorNeedsDefrag(fVulkanDrawIndexBufferRangeAllocator) or
+          AllocatorNeedsDefrag(fVulkanDrawUniqueIndexBufferRangeAllocator) or
+          AllocatorNeedsDefrag(fVulkanMorphTargetVertexBufferRangeAllocator) or
+          AllocatorNeedsDefrag(fVulkanJointBlockBufferRangeAllocator) or
+          AllocatorNeedsDefrag(fVulkanNodeMatricesBufferRangeAllocator) or
+          AllocatorNeedsDefrag(fVulkanMorphTargetVertexWeightsBufferRangeAllocator);
  end else begin
   result:=false;
  end;
