@@ -85,8 +85,8 @@ void main() {
   uint viewIndex = pushConstants.viewBaseIndex + uint(gl_ViewIndex);
 #endif
 
-  // Fetch DrawInfo via gl_BaseInstance (= firstInstance from IndirectCommand = DrawInfo index)
-  const uint drawIndex = uint(gl_BaseInstance);
+  // Fetch DrawInfo via gl_InstanceIndex (= firstInstance + instance iteration index = DrawInfo index)
+  const uint drawIndex = uint(gl_InstanceIndex);
   DrawInfo drawInfo = drawInfoItems[drawIndex];
 
   // Vertex index adjusted by per-group offset (0 for big-buffer, base vertex for per-group buffers)
