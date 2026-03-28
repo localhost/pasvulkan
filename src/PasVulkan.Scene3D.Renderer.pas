@@ -563,6 +563,9 @@ begin
  if aVulkanDevice.PhysicalDevice.BufferDeviceAddressFeaturesKHR.bufferDeviceAddress=VK_FALSE then begin
   raise EpvApplication.Create('Application','Support for VK_KHR_buffer_device_address (bufferDeviceAddress) is needed for BDA vertex pulling',LOG_ERROR);
  end;
+ if aVulkanDevice.PhysicalDevice.fVulkan11Features.shaderDrawParameters=VK_FALSE then begin
+  raise EpvApplication.Create('Application','Support for shaderDrawParameters is needed for BDA vertex pulling',LOG_ERROR);
+ end;
  if (aVulkanDevice.Instance.APIVersion and VK_API_VERSION_WITHOUT_PATCH_MASK)<VK_API_VERSION_1_1 then begin
   if aVulkanDevice.PhysicalDevice.AvailableExtensionNames.IndexOf(VK_KHR_BIND_MEMORY_2_EXTENSION_NAME)>=0 then begin
    aVulkanDevice.EnabledExtensionNames.Add(VK_KHR_BIND_MEMORY_2_EXTENSION_NAME);

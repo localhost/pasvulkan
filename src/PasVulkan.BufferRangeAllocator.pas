@@ -490,7 +490,7 @@ var OldOffset:TpvInt64;
 begin
  if (aBufferRange.Offset>=0) and (aBufferRange.Size>0) then begin
   OldOffset:=aBufferRange.Offset;
-  aBufferRange.Offset:=Allocate(aBufferRange.Size);
+  aBufferRange.Offset:=Allocate(aBufferRange.Size,aBufferRange.Alignment);
   result:=OldOffset<>aBufferRange.Offset;
  end else begin
   result:=false; 
@@ -550,7 +550,7 @@ type TNodes=array of TRangeRedBlackTree.TNode;
 var Index,CountAllocatedNodes:TpvSizeInt;
     AllocatedNodes:TNodes;
     Node,NextNode:TRangeRedBlackTree.TNode;
-    OriginalOffset,Offset,TotalSize,Alignment:TpvInt64;
+    OriginalOffset,Offset,PreviousEndOffset,TotalSize,Alignment:TpvInt64;
 begin
 
  result:=false;
@@ -592,6 +592,7 @@ begin
    // Assign new offsets, create free nodes for the gaps between the allocated nodes while checking and correcting the alignment, and
    // move the data if the offset has changed
    Offset:=0;
+   PreviousEndOffset:=0;
    for Index:=0 to CountAllocatedNodes-1 do begin
     Node:=AllocatedNodes[Index];
     OriginalOffset:=Node.Value.fOffset;
@@ -599,11 +600,11 @@ begin
     if (Alignment>1) and ((Offset and (Alignment-1))<>0) then begin
      inc(Offset,Alignment-(Offset and (Alignment-1)));
     end;
+    if PreviousEndOffset<Offset then begin
+     TpvBufferRangeAllocator.TRange.Create(self,PreviousEndOffset,Offset-PreviousEndOffset,1,TpvBufferRangeAllocator.TRange.TAllocationType.Free);
+     inc(fFragmentCount);
+    end;
     if Offset<>Node.Value.fOffset then begin
-     if OriginalOffset<Offset then begin
-      TpvBufferRangeAllocator.TRange.Create(self,OriginalOffset,Offset-OriginalOffset,1,TpvBufferRangeAllocator.TRange.TAllocationType.Free);
-       inc(fFragmentCount); // Gap free block
-     end;
      result:=true;
      if assigned(aMove) then begin
       aMove(self,Node.Value.fOffset,Offset,Node.Value.fSize);
@@ -611,6 +612,7 @@ begin
      Node.Value.Update(Offset,Node.Value.fSize,1,Node.Value.fAllocationType);
     end;
     inc(Offset,Node.Value.fSize);
+    PreviousEndOffset:=Offset;
    end;
 
    // Create new free node at the end
