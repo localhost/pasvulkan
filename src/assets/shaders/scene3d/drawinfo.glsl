@@ -6,23 +6,34 @@
 #extension GL_EXT_buffer_reference2 : enable
 #extension GL_EXT_buffer_reference_uvec2 : enable
 
-// Packed vertex types matching TGPUCachedVertex (32 bytes) and TGPUStaticVertex (32 bytes)
+#include "tbnmode.glsl"
 
+// Packed vertex types matching TGPUCachedVertex and TGPUStaticVertex
+
+#ifdef TBN_OPTIMIZED
 struct PackedCachedVertex {
-  float posX, posY, posZ;         // 12 bytes — position (3x float32)
-  uint normalXY;                  //  4 bytes — snorm16(normal.x) | snorm16(normal.y)
-  uint normalZSign;               //  4 bytes — snorm16(normal.z) | snorm16(bitangentSign)
-  uint tangentXY;                 //  4 bytes — snorm16(tangent.x) | snorm16(tangent.y)
-  uint tangentZModelScaleX;       //  4 bytes — snorm16(tangent.z) | half(modelScaleX)
-  uint modelScaleYZ;              //  4 bytes — half(modelScaleY) | half(modelScaleZ)
+  float posX, posY, posZ;         // 12 bytes - position (3x float32)
+  uint qtangent;                  //  4 bytes - QTangent UI32 encoded TBN
+  uint modelScaleXY;              //  4 bytes - packHalf2x16(scaleX, scaleY)
+  uint modelScaleZPad;            //  4 bytes - packHalf2x16(scaleZ, 0)
+}; // 24 bytes
+#else
+struct PackedCachedVertex {
+  float posX, posY, posZ;         // 12 bytes - position (3x float32)
+  uint normalXY;                  //  4 bytes - snorm16(normal.x) | snorm16(normal.y)
+  uint normalZSign;               //  4 bytes - snorm16(normal.z) | snorm16(bitangentSign)
+  uint tangentXY;                 //  4 bytes - snorm16(tangent.x) | snorm16(tangent.y)
+  uint tangentZModelScaleX;       //  4 bytes - snorm16(tangent.z) | half(modelScaleX)
+  uint modelScaleYZ;              //  4 bytes - half(modelScaleY) | half(modelScaleZ)
 }; // 32 bytes
+#endif
 
 struct PackedStaticVertex {
-  vec2 texCoord0;                 //  8 bytes — (2x float32)
-  vec2 texCoord1;                 //  8 bytes — (2x float32)
-  uint colorRG;                   //  4 bytes — half(r) | half(g)
-  uint colorBA;                   //  4 bytes — half(b) | half(a)
-  uint materialID;                //  4 bytes — uint32
+  vec2 texCoord0;                 //  8 bytes - (2x float32)
+  vec2 texCoord1;                 //  8 bytes - (2x float32)
+  uint colorRG;                   //  4 bytes - half(r) | half(g)
+  uint colorBA;                   //  4 bytes - half(b) | half(a)
+  uint materialID;                //  4 bytes - uint32
   uint _unused;                   //  4 bytes
 }; // 32 bytes
 
@@ -40,7 +51,7 @@ layout(buffer_reference, std430, buffer_reference_align = 4) readonly buffer Gen
   uint generations[];
 };
 
-// GlobalBDAPointers — 48 bytes, single instance in SSBO at binding 7
+// GlobalBDAPointers - 48 bytes, single instance in SSBO at binding 7
 // Contains the global buffer device addresses shared by all draws (big-buffer mode).
 // For future per-group buffers, these would move back into DrawInfo or become per-group.
 // Layout (std430):
@@ -61,23 +72,23 @@ struct GlobalBDAPointers {
   uvec2 _reserved;
 };
 
-// DrawInfo struct — 128 bytes per draw, stored in SSBO at binding 0
+// DrawInfo struct - 128 bytes per draw, stored in SSBO at binding 0
 // BDA pointers moved to GlobalBDAPointers at binding 7 (global for big-buffer mode)
 // Matrices stored as mat3x4 (3 columns of vec4 = 48 bytes each) for affine transforms:
 //   Each mat3x4 column stores original_column.xyz with translation component in .w
 //   The implicit 4th row of the affine matrix is always (0, 0, 0, 1)
 // Layout (std430):
-//   offset   0: modelMatrix              (mat3x4, 48 bytes — affine world transform, Identity for pre-transformed)
-//   offset  48: previousModelMatrix      (mat3x4, 48 bytes — previous frame, velocity)
+//   offset   0: modelMatrix              (mat3x4, 48 bytes - affine world transform, Identity for pre-transformed)
+//   offset  48: previousModelMatrix      (mat3x4, 48 bytes - previous frame, velocity)
 //   offset  96: instanceDataIndex        (uint, 4 bytes)
 //   offset 100: objectIndex              (uint, 4 bytes)
 //   offset 104: flags                    (uint, 4 bytes)
 //   offset 108: reserved                 (uint, 4 bytes)
-//   offset 112: _padding                 (uvec4, 16 bytes — padding to 128 for power-of-two alignment)
+//   offset 112: _padding                 (uvec4, 16 bytes - padding to 128 for power-of-two alignment)
 // Total: 128 bytes
 
 struct DrawInfo {
-  // BDA pointers commented out — now in GlobalBDAPointers at binding 7
+  // BDA pointers commented out - now in GlobalBDAPointers at binding 7
   // For future per-group buffers, uncomment these and remove from GlobalBDAPointers
   //uvec2 cachedVerticesBDA;
   //uvec2 staticVerticesBDA;
@@ -114,6 +125,30 @@ vec3 unpackPosition(in PackedCachedVertex v) {
   return vec3(v.posX, v.posY, v.posZ);
 }
 
+#ifdef TBN_OPTIMIZED
+
+vec4 unpackNormalSign(in PackedCachedVertex v) {
+  mat3 tbn = decodeQTangentUI32(v.qtangent);
+  vec3 normal = tbn[2];
+  // decodeQTangentUI32 uses cross(T, N) * s for bitangent, but mesh.vert uses cross(N, T) * w.
+  // Since cross(N, T) = -cross(T, N), we need w = -s.
+  float s = ((v.qtangent & (1u << 29u)) != 0u) ? -1.0 : 1.0;
+  return vec4(normal, -s);
+}
+
+vec3 unpackTangent(in PackedCachedVertex v) {
+  mat3 tbn = decodeQTangentUI32(v.qtangent);
+  return tbn[0];
+}
+
+vec3 unpackModelScale(in PackedCachedVertex v) {
+  vec2 scaleXY = unpackHalf2x16(v.modelScaleXY);
+  float scaleZ = unpackHalf2x16(v.modelScaleZPad).x;
+  return vec3(scaleXY, scaleZ);
+}
+
+#else
+
 vec4 unpackNormalSign(in PackedCachedVertex v) {
   vec2 xy = unpackSnorm2x16(v.normalXY);
   vec2 zw = unpackSnorm2x16(v.normalZSign);
@@ -131,6 +166,8 @@ vec3 unpackModelScale(in PackedCachedVertex v) {
   vec2 scaleYZ = unpackHalf2x16(v.modelScaleYZ);
   return vec3(scaleX, scaleYZ);
 }
+
+#endif
 
 // Unpacking helpers for PackedStaticVertex
 

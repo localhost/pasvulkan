@@ -73,6 +73,8 @@ unit PasVulkan.Scene3D;
 
 {$define SplitInstanceUpdate}
 
+{$define TBN_OPTIMIZED}
+
 interface
 
 uses {$ifdef Windows}
@@ -556,12 +558,18 @@ type EpvScene3D=class(Exception);
              case boolean of
               false:(
                Position:TpvVector3;                  //  12   12 (32-bit float 3D vector)
+{$ifdef TBN_OPTIMIZED}
+               QTangent:TpvUInt32;                   // + 4 = 16 (QTangent UI32 encoded TBN)
+               ModelScaleXY:TpvUInt32;               // + 4 = 20 (packHalf2x16 model scale xy)
+               ModelScaleZPad:TpvUInt32;             // + 4 = 24 (packHalf2x16 model scale z + pad)
+{$else}
                NormalSign:TInt16Vector4;             // + 8 = 20 (signed 16-bit Normal + TBN sign)
                TangentXYZModelScaleX:TInt16Vector4;  // + 8 = 28 (signed 16-bit Tangent + model scale xy)
                ModelScaleYZ:TpvHalfFloatVector2;     // + 4 = 32 (model scale yz)
-              );                                     //  ==   ==
-              true:(                                 //  32   32 per vertex
-               Padding:array[0..31] of TpvUInt8;
+{$endif}
+              );
+              true:(
+               Padding:array[0..{$ifdef TBN_OPTIMIZED}23{$else}31{$endif}] of TpvUInt8;
               );
             end;
             PGPUCachedVertex=^TGPUCachedVertex;

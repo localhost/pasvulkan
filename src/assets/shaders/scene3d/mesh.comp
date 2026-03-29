@@ -13,16 +13,29 @@ layout(push_constant) uniform PushConstants {
   uint countIndices;
 } pushConstants;
 
+#include "tbnmode.glsl"
+
 struct InPackedVertex {
   uvec4 positionMorphTargetVertexBaseIndex; // xyz = position, w = morphTargetVertexBaseIndex
   uvec4 jointBlockBaseIndexCountJointBlocksRootNodeNodeIndex; // x = jointBlockBaseIndex, y = countJointBlocks, z = rootNode, w = nodeIndex
   uvec4 normalTangentFlagsGeneration; // x = normal (2x half oct), y = tangent (2x half oct), z = flags, w = generation
 };
 
+#ifdef TBN_OPTIMIZED
+// All scalar members to ensure std430 struct alignment = 4, array stride = 24 (not 32).
+// Using uvec4+uvec2 would give alignment 16 => stride 32, mismatching the 24-byte Pascal record.
+struct OutPackedVertex {
+  uint posX, posY, posZ;  // 12 bytes - position (3x float32 as uint bits)
+  uint qtangent;          //  4 bytes - QTangent UI32 encoded TBN
+  uint modelScaleXY;      //  4 bytes - packHalf2x16(scaleX, scaleY)
+  uint modelScaleZPad;    //  4 bytes - packHalf2x16(scaleZ, 0)
+}; // 24 bytes, alignment 4, array stride 24
+#else
 struct OutPackedVertex {
   uvec4 positionNormalXY; // xyz = position (32-bit float), w = normal x y (16-bit signed normalized oct)
-  uvec4 normalZSignTangentXYZModelScaleXYZ; // x = normal z + sign of tangent z (16-bit signed normalized), y = tangent x y (16-bit signed normalized oct), z = tangent z + model scale x (16-bit float), w = model scale y z (16-bit float)
-};
+  uvec4 normalZSignTangentXYZModelScaleXYZ; // x = normal z + sign of tangent z (16-bit signed normalized), y = tangent x y (16-bit signed normalized), z = tangent z + model scale x (16-bit float), w = model scale y z (16-bit float)
+}; // 32 bytes, alignment 16, array stride 32
+#endif
 
 #ifdef RAYTRACING
 struct OutRayTracingVertex {
@@ -38,7 +51,7 @@ struct MorphTargetVertex {
 // Static descriptor set. Explanation:
 //   1. Contains data resources primarily processed on or by the GPU itself, without continuous streaming
 //      from the CPU. However, the CPU can still update these resources from time to time, not every frame.
-//      The updates are done in a way that the GPU doesn’t have to wait for the CPU to finish, by updating
+//      The updates are done in a way that the GPU doesn't have to wait for the CPU to finish, by updating
 //      only the data ranges not currently used by the GPU at the time of the update. For example by 
 //      reusing data ranges, which were used by old deleted objects, for new objects, since buffers can 
 //      always only grow in size, never shrink, in this implementation.   
@@ -229,8 +242,6 @@ void main(){
         vec3 bitangent = normalize(tangentSpace[1]);
         vec3 normal = normalize(tangentSpace[2]);
 
-        float tbnSign = (dot(normalize(cross(normal, tangent)), bitangent) < 0.0) ? -1.0 : 1.0;
-
         vec3 modelScale = vec3(length(modelNodeMatrix[0].xyz), length(modelNodeMatrix[1].xyz), length(modelNodeMatrix[2].xyz));
 
          // Transform position
@@ -238,6 +249,18 @@ void main(){
 
         // Perspective divide
         vec3 finalPosition = p.xyz / p.w;
+
+#ifdef TBN_OPTIMIZED
+        OutPackedVertex outVertex;
+        outVertex.posX = floatBitsToUint(finalPosition.x);
+        outVertex.posY = floatBitsToUint(finalPosition.y);
+        outVertex.posZ = floatBitsToUint(finalPosition.z);
+        outVertex.qtangent = encodeQTangentUI32(mat3(tangent, bitangent, normal));
+        outVertex.modelScaleXY = packHalf2x16(modelScale.xy);
+        outVertex.modelScaleZPad = packHalf2x16(vec2(modelScale.z, 0.0));
+        outVertices[vertexIndex] = outVertex;
+#else
+        float tbnSign = (dot(normalize(cross(normal, tangent)), bitangent) < 0.0) ? -1.0 : 1.0;
 
         outVertices[vertexIndex] = OutPackedVertex(
           /*outPackedVertex.positionNormalXY =*/ uvec4(
@@ -251,6 +274,7 @@ void main(){
             packHalf2x16(modelScale.yz)
           )
         );
+#endif
 
         outGenerations[vertexIndex] = inGeneration;
 
