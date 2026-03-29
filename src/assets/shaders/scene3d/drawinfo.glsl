@@ -9,7 +9,7 @@
 // Packed vertex types matching TGPUCachedVertex (32 bytes) and TGPUStaticVertex (32 bytes)
 
 struct PackedCachedVertex {
-  float posX, posY, posZ;        // 12 bytes — position (3x float32)
+  float posX, posY, posZ;         // 12 bytes — position (3x float32)
   uint normalXY;                  //  4 bytes — snorm16(normal.x) | snorm16(normal.y)
   uint normalZSign;               //  4 bytes — snorm16(normal.z) | snorm16(bitangentSign)
   uint tangentXY;                 //  4 bytes — snorm16(tangent.x) | snorm16(tangent.y)
