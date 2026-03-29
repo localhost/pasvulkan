@@ -144,7 +144,7 @@ uint encodeTangentSpaceAsRGB10A2SNorm(mat3 tbn){
 uint encodeQTangentUI32(mat3 m){
   float r = (determinant(m) < 0.0) ? -1.0 : 1.0; // Reflection matrix handling 
   m[2] *= r;
-#if 0
+#ifdef ASSUME_ORTHOGONAL_TANGENT_SPACE
   // When the input matrix is always a valid orthogonal tangent space matrix, we can simplify the quaternion calculation to just this:  
   vec4 q = vec4(m[1][2] - m[2][1], m[2][0] - m[0][2], m[0][1] - m[1][0], 1.0 + m[0][0] + m[1][1] + m[2][2]);
 #else  
