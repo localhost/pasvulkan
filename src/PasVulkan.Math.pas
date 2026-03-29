@@ -21786,7 +21786,7 @@ begin
  result:=((TpvUInt32(round(clamp(q.x*511.0,-511.0,511.0)+512.0)) and $3ff) shl 0) or
          ((TpvUInt32(round(clamp(q.y*511.0,-511.0,511.0)+512.0)) and $3ff) shl 10) or
          ((TpvUInt32(round(clamp(q.z*255.0,-255.0,255.0)+256.0)) and $1ff) shl 20) or
-         (TpvUInt32(Ord((aTangent.Cross(aNormal).Dot(aBitangent)*Scale)<0.0) and 1) shl 29) or
+         (TpvUInt32(Ord((aNormal.Cross(aTangent).Dot(aBitangent)*Scale)<0.0) and 1) shl 29) or
          ((TpvUInt32(MaxComponentIndex and 3) shl 30));
 end;
 
@@ -21831,7 +21831,7 @@ begin
  tz:=q.www*t2.xyz;
  aTangent:=TpvVector3.InlineableCreate(1.0-(ty.y+(q.z*t2.z)),tx.y+tz.z,tx.z-tz.y).Normalize;
  aNormal:=TpvVector3.InlineableCreate(tx.z+tz.y,ty.z-tz.x,1.0-(tx.x+ty.y)).Normalize;
- aBitangent:=aTangent.Cross(aNormal)*TpvScalar(TpvInt32(1-((Ord((aValue and (TpvUInt32(1) shl 29))<>0) and 1) shl 1)));
+ aBitangent:=aNormal.Cross(aTangent)*TpvScalar(TpvInt32(1-((Ord((aValue and (TpvUInt32(1) shl 29))<>0) and 1) shl 1)));
 end;
 
 function DecodeQTangentUI32(const aValue:TpvUInt32):TpvMatrix3x3;

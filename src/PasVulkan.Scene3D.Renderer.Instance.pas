@@ -7450,8 +7450,8 @@ begin
       GPUDrawIndexedIndirectCommand^.Flags:=0;
       RenderInstanceInstanceDataIndex:=TpvScene3D.TGroup.TInstance.TRenderInstance(GlobalRenderInstanceCullDataDynamicArray^.ItemArray[FirstInstanceID+InstanceIndex].RenderInstance).InstanceDataIndex;
       if (RenderInstanceInstanceDataIndex>0) and (RenderInstanceInstanceDataIndex<TpvUInt32(fScene3D.GPUInstanceDataDynamicArray.Count)) then begin
-       if (fScene3D.GPUInstanceDataDynamicArray.ItemArray[RenderInstanceInstanceDataIndex].Dissolve>0.0) or
-          (fScene3D.GPUInstanceDataDynamicArray.ItemArray[RenderInstanceInstanceDataIndex].DitheredTransparency>0.0) then begin
+       if (fScene3D.GPUInstanceDataDynamicArray.ItemArray[RenderInstanceInstanceDataIndex].Dissolve>1e-4) or
+          (fScene3D.GPUInstanceDataDynamicArray.ItemArray[RenderInstanceInstanceDataIndex].DitheredTransparency>1e-4) then begin
         GPUDrawIndexedIndirectCommand^.Flags:=GPUDrawIndexedIndirectCommand^.Flags or (TpvUInt32(1) shl 1);
        end;
       end;

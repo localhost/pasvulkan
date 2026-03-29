@@ -12,10 +12,6 @@
 #define LIGHTCLUSTERS
 #define FRUSTUMCLUSTERGRID
 
-#ifdef USE_MATERIAL_BUFFER_REFERENCE
-#elif defined(USE_MATERIAL_SSBO)
-#endif 
-
 #extension GL_EXT_multiview : enable
 #extension GL_ARB_separate_shader_objects : enable
 #extension GL_ARB_shading_language_420pack : enable
@@ -311,15 +307,10 @@ float diffuseTransmissionThickness = 1.0;
 
 #endif // !defined(DEPTHONLY) || defined(VOXELIZATION) 
 
-#if defined(USE_MATERIAL_BUFFER_REFERENCE)
-  #ifdef USE_INT64
-    Material material = uMaterials.materials[inMaterialID];
-  #else
-    Material material;
-  #endif
+#ifdef USE_INT64
+Material material = uMaterials.materials[inMaterialID];
 #else
-  #define material materials[inMaterialID]
-//Material material = materials[inMaterialID];
+Material material;
 #endif
 
 const uint smPBRMetallicRoughness = 0u,  //
@@ -447,7 +438,7 @@ void main() {
   vec3 triangleNormal = normalize(cross(dFdyFine(inCameraRelativePosition), dFdxFine(inCameraRelativePosition)));
 #endif // HAVE_PERVERTEX
 #endif // RAYTRACING
-#if defined(USE_MATERIAL_BUFFER_REFERENCE) && !defined(USE_INT64)
+#if !defined(USE_INT64)
   material = uMaterials.materials;
   {
     uvec2 materialPointer = uvec2(material);  

@@ -8,27 +8,6 @@
 #endif
 
 //#ifdef MESHS
-#if !defined(USE_MATERIAL_BUFFER_REFERENCE)
-struct Material {
-  vec4 baseColorFactor;
-  vec4 specularFactor;
-  vec4 emissiveFactor;
-  vec4 metallicRoughnessNormalScaleOcclusionStrengthFactor;
-  vec4 sheenColorFactorSheenRoughnessFactor;
-  vec4 clearcoatFactorClearcoatRoughnessFactor;
-  vec4 iorIridescenceFactorIridescenceIorIridescenceThicknessMinimum;
-  vec4 iridescenceThicknessMaximumTransmissionFactorVolumeThicknessFactorVolumeAttenuationDistance;
-  vec4 diffuseTransmissionColorFactor;
-  uvec4 volumeAttenuationColorAnisotropyStrengthAnisotropyRotation;
-  uvec4 dispersionShadowCastMaskShadowReceiveMaskUnused;
-  uvec4 hologramBlock0;
-  uvec4 hologramBlock1;
-  uvec4 hologramBlock2;
-  uvec4 alphaCutOffFlagsTex0Tex1;
-  int textures[20];
-  mat3x2 textureTransforms[20];
-};
-#endif
 
 #include "drawinfo.glsl"
 
@@ -91,7 +70,6 @@ layout(set = 0, binding = 4, std430) readonly buffer DecalTreeNodeData {
 #endif // LIGHTS
 
 //#ifdef MESHS
-#if defined(USE_MATERIAL_BUFFER_REFERENCE)
 
 layout(buffer_reference, std430, buffer_reference_align = 16) readonly buffer Material {
   vec4 baseColorFactor;
@@ -117,12 +95,6 @@ layout(set = 0, binding = 5, std140) uniform Materials {
   Material materials;
 } uMaterials;
 
-#else
-
-layout(set = 0, binding = 5, std430) readonly buffer Materials {
-  Material materials[];
-};
-#endif // defined(USE_MATERIAL_BUFFER_REFERENCE)
 //#endif // MESHS
 
 #if defined(USE_BUFFER_REFERENCE) 

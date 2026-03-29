@@ -104,23 +104,12 @@ void main() {
 
   // Unpack vertex attributes
   vec3 position = unpackPosition(cv);
-#ifdef TBN_OPTIMIZED
-  // Decode QTangent once => tangent space directly, no double-decode
-  mat3 tangentSpace = decodeQTangentUI32(cv.qtangent);
-  // The encoder flips N for reflected TBN (det<0) before quaternion extraction,
-  // so the decoder returns -N for reflected meshes. Correct it here.
-  // bit29=1 => s=-1 => non-reflected (N correct), bit29=0 => s=+1 => reflected (N flipped)
-  float qtangentS = ((cv.qtangent & (1u << 29u)) != 0u) ? -1.0 : 1.0;
-  tangentSpace[2] *= -qtangentS; // Restore original N: non-reflected *1, reflected *-1
-  // mesh.frag reconstructs B = cross(N, T) * w, so w = +1 non-reflected, -1 reflected = -s
-  float bitangentSign = -qtangentS;
-#else
-  vec4 normalSign = unpackNormalSign(cv);
-  vec3 tangent = unpackTangent(cv);
-#endif
+  vec4 normalSign;
+  vec3 tangent;
+  unpackTBNOct12(cv, normalSign, tangent);
   vec3 modelScale = unpackModelScale(cv);
-  vec2 texCoord0 = sv.texCoord0;
-  vec2 texCoord1 = sv.texCoord1;
+  vec2 texCoord0 = vec2(sv.texCoord0X, sv.texCoord0Y);
+  vec2 texCoord1 = vec2(sv.texCoord1X, sv.texCoord1Y);
   vec4 color0 = unpackColor0(sv);
   uint materialID = sv.materialID;
 
@@ -135,13 +124,11 @@ void main() {
 #endif
 
   // Build tangent space
-#ifndef TBN_OPTIMIZED
   mat3 tangentSpace;
   {
     vec3 n = normalSign.xyz;
     tangentSpace = mat3(normalize(tangent), normalize(cross(n, tangent)) * normalSign.w, normalize(n));
   }
-#endif
 
   View view = uView.views[viewIndex];
 
@@ -195,11 +182,7 @@ void main() {
   outWorldSpacePosition = worldSpacePosition;
   outViewSpacePosition = viewSpacePosition.xyz;
   outCameraRelativePosition = worldSpacePosition - cameraPosition;
-#ifdef TBN_OPTIMIZED
-  outTangentSign = vec4(tangentSpace[0], bitangentSign);
-#else
   outTangentSign = vec4(tangentSpace[0], normalSign.w);
-#endif
   outNormal = tangentSpace[2];
   outTexCoord0 = texCoord0;
   outTexCoord1 = texCoord1;

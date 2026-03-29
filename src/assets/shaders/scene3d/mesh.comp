@@ -13,29 +13,29 @@ layout(push_constant) uniform PushConstants {
   uint countIndices;
 } pushConstants;
 
-#include "tbnmode.glsl"
+#include "vertex.glsl"
 
 struct InPackedVertex {
-  uvec4 positionMorphTargetVertexBaseIndex; // xyz = position, w = morphTargetVertexBaseIndex
-  uvec4 jointBlockBaseIndexCountJointBlocksRootNodeNodeIndex; // x = jointBlockBaseIndex, y = countJointBlocks, z = rootNode, w = nodeIndex
-  uvec4 normalTangentFlagsGeneration; // x = normal (2x half oct), y = tangent (2x half oct), z = flags, w = generation
-};
+  float posX, posY, posZ;                 // 12 bytes - position (3x float32)
+  uint morphTargetVertexBaseIndex;       //  4 bytes
+  uint jointBlockBaseIndex;              //  4 bytes
+  uint countJointBlocks;                 //  4 bytes
+  uint rootNode;                         //  4 bytes
+  uint nodeIndex;                        //  4 bytes
+  uint normal;                           //  4 bytes - signed 16-bit oct-encoded normal (packed snorm2x16)
+  uint tangent;                          //  4 bytes - signed 16-bit oct-encoded tangent (packed snorm2x16)
+  uint flags;                            //  4 bytes - bit 0: bitangent sign, bits 1..31: unused (reserved for future use)
+  uint generation;                       //  4 bytes
+}; // 48 bytes, alignment 4, array stride 48
 
-#ifdef TBN_OPTIMIZED
 // All scalar members to ensure std430 struct alignment = 4, array stride = 24 (not 32).
 // Using uvec4+uvec2 would give alignment 16 => stride 32, mismatching the 24-byte Pascal record.
 struct OutPackedVertex {
-  uint posX, posY, posZ;  // 12 bytes - position (3x float32 as uint bits)
-  uint qtangent;          //  4 bytes - QTangent UI32 encoded TBN
-  uint modelScaleXY;      //  4 bytes - packHalf2x16(scaleX, scaleY)
-  uint modelScaleZPad;    //  4 bytes - packHalf2x16(scaleZ, 0)
+  float posX, posY, posZ;  // 12 bytes - position (3x float32)
+  uint tbnPart0;           //  4 bytes - N.x(12) | N.y(12) | T.x_lo(8)
+  uint tbnPart1ModelScaleX;//  4 bytes - T.x_hi(4) | T.y(12) | half(modelScaleX) with sign=bsign (16)
+  uint modelScaleYZ;       //  4 bytes - packHalf2x16(scaleY, scaleZ)
 }; // 24 bytes, alignment 4, array stride 24
-#else
-struct OutPackedVertex {
-  uvec4 positionNormalXY; // xyz = position (32-bit float), w = normal x y (16-bit signed normalized oct)
-  uvec4 normalZSignTangentXYZModelScaleXYZ; // x = normal z + sign of tangent z (16-bit signed normalized), y = tangent x y (16-bit signed normalized), z = tangent z + model scale x (16-bit float), w = model scale y z (16-bit float)
-}; // 32 bytes, alignment 16, array stride 32
-#endif
 
 #ifdef RAYTRACING
 struct OutRayTracingVertex {
@@ -44,9 +44,12 @@ struct OutRayTracingVertex {
 #endif
 
 struct MorphTargetVertex {
-   uvec4 position; // xyz = position, w = index 
-   uvec4 normalTangentNext; // x = normal x y (16-bit signed normalized oct), y = tangent x y (16-bit signed normalized oct), z = next, w = unused
-};
+  uint posX, posY, posZ; // position as floatBitsToUint
+  uint index;
+  uint normal;           // signed 16-bit oct-encoded normal (packed snorm2x16)
+  uint tangent;          // signed 16-bit oct-encoded tangent (packed snorm2x16)
+  uint next;
+}; // 28 bytes, alignment 4, array stride 28
 
 // Static descriptor set. Explanation:
 //   1. Contains data resources primarily processed on or by the GPU itself, without continuous streaming
@@ -77,9 +80,9 @@ layout(set = 0, binding = 2, std430) buffer MorphTargetVertices {
 };
 
 struct JointBlock {
-  uvec4 joints;
-  vec4 weights;
-};
+  uint joint0, joint1, joint2, joint3; // 16 bytes
+  uint packedWeights;                  //  4 bytes - 4x uint8 unorm packed
+}; // 20 bytes, alignment 4, array stride 20
 
 layout(set = 0, binding = 3, std430) buffer JointBlocks {
   JointBlock jointBlocks[];
@@ -155,25 +158,28 @@ void main(){
 
       // Read vertex data
       InPackedVertex inPackedVertex = inVertices[vertexIndex];
-      const vec3 inPosition = uintBitsToFloat(inPackedVertex.positionMorphTargetVertexBaseIndex.xyz);
-      const uint inMorphTargetVertexBaseIndex = inPackedVertex.positionMorphTargetVertexBaseIndex.w;
-      const uint inJointBlockBaseIndex = inPackedVertex.jointBlockBaseIndexCountJointBlocksRootNodeNodeIndex.x;
-      const uint inCountJointBlocks = inPackedVertex.jointBlockBaseIndexCountJointBlocksRootNodeNodeIndex.y;
-      const uint inRootNode = inPackedVertex.jointBlockBaseIndexCountJointBlocksRootNodeNodeIndex.z;
-      const uint inNodeIndex = inPackedVertex.jointBlockBaseIndexCountJointBlocksRootNodeNodeIndex.w;
-      const vec2 inNormal = unpackSnorm2x16(inPackedVertex.normalTangentFlagsGeneration.x);
-      const vec2 inTangent = unpackSnorm2x16(inPackedVertex.normalTangentFlagsGeneration.y);
-      const uint inFlags = inPackedVertex.normalTangentFlagsGeneration.z;
-      const uint inGeneration = inPackedVertex.normalTangentFlagsGeneration.w;
+      const vec3 inPosition = vec3(inPackedVertex.posX, inPackedVertex.posY, inPackedVertex.posZ);
+      const uint inMorphTargetVertexBaseIndex = inPackedVertex.morphTargetVertexBaseIndex;
+      const uint inJointBlockBaseIndex = inPackedVertex.jointBlockBaseIndex;
+      const uint inCountJointBlocks = inPackedVertex.countJointBlocks;
+      const uint inRootNode = inPackedVertex.rootNode;
+      const uint inNodeIndex = inPackedVertex.nodeIndex;
+      const vec2 inNormal = unpackSnorm2x16(inPackedVertex.normal);
+      const vec2 inTangent = unpackSnorm2x16(inPackedVertex.tangent);
+      const uint inFlags = inPackedVertex.flags;
+      const uint inGeneration = inPackedVertex.generation;
 
      vec3 position = inPosition;
 
       // Decode tangent space
       mat3 tangentSpace;
+      float tangentBitangentSign;
       {
         vec3 tangent = octDecode(inTangent);
         vec3 normal = octDecode(inNormal);
-        tangentSpace = mat3(tangent, normalize(cross(normal, tangent)) * (((inFlags & (1u << 0)) != 0) ? -1.0 : 1.0), normal);
+        float flagSign = (((inFlags & (1u << 0)) != 0) ? -1.0 : 1.0);
+        tangentSpace = mat3(tangent, normalize(cross(normal, tangent)) * flagSign, normal);
+        tangentBitangentSign = sign(dot(cross(tangentSpace[2], tangentSpace[0]), tangentSpace[1]));
       }
       // mat3 tangentSpace = mat3(inTangent.xyz, cross(inTangent.xyz, inNormal) * inTangent.w, inNormal);
 
@@ -186,13 +192,13 @@ void main(){
         uint protectionCounter = 0x0ffffu;
         while((morphTargetVertexIndex != 0xffffffffu) && (protectionCounter-- > 0u)){
           MorphTargetVertex morphTargetVertex = morphTargetVertices[morphTargetVertexIndex];
-          float weight = morphTargetWeights[morphTargetVertex.position.w];
+          float weight = morphTargetWeights[morphTargetVertex.index];
           if(weight != 0.0){ // since octehedron decoding can be somewhat costly, we only do it when the weight is not zero
-            position += uintBitsToFloat(morphTargetVertex.position.xyz) * weight;
-            normal += vec4(octDecode(unpackSnorm2x16(morphTargetVertex.normalTangentNext.x)) - originalNormal, 1.0) * weight;
-            tangent.xyz += (octDecode(unpackSnorm2x16(morphTargetVertex.normalTangentNext.y)) - originalTangent) * weight;
-          }  
-          morphTargetVertexIndex = morphTargetVertex.normalTangentNext.z;
+            position += uintBitsToFloat(uvec3(morphTargetVertex.posX, morphTargetVertex.posY, morphTargetVertex.posZ)) * weight;
+            normal += vec4(octDecode(unpackSnorm2x16(morphTargetVertex.normal)) - originalNormal, 1.0) * weight;
+            tangent.xyz += (octDecode(unpackSnorm2x16(morphTargetVertex.tangent)) - originalTangent) * weight;
+          }
+          morphTargetVertexIndex = morphTargetVertex.next;
         }
         normal.xyz = normalize(normal.xyz);
         tangent.xyz = normalize(tangent.xyz);
@@ -218,10 +224,11 @@ void main(){
             jointBlockBaseIndex < endJointBlockBaseIndex;                                                                         //
             jointBlockBaseIndex++){
           JointBlock jointBlock = jointBlocks[jointBlockBaseIndex];
-          skinMatrix += ((inverseNodeMatrix * nodeMatrices[jointBlock.joints.x]) * jointBlock.weights.x) +  //
-                        ((inverseNodeMatrix * nodeMatrices[jointBlock.joints.y]) * jointBlock.weights.y) +  //
-                        ((inverseNodeMatrix * nodeMatrices[jointBlock.joints.z]) * jointBlock.weights.z) +  //
-                        ((inverseNodeMatrix * nodeMatrices[jointBlock.joints.w]) * jointBlock.weights.w);
+          vec4 weights = unpackUnorm4x8(jointBlock.packedWeights);
+          skinMatrix += ((inverseNodeMatrix * nodeMatrices[jointBlock.joint0]) * weights.x) +  //
+                        ((inverseNodeMatrix * nodeMatrices[jointBlock.joint1]) * weights.y) +  //
+                        ((inverseNodeMatrix * nodeMatrices[jointBlock.joint2]) * weights.z) +  //
+                        ((inverseNodeMatrix * nodeMatrices[jointBlock.joint3]) * weights.w);
         }
         baseMatrix *= skinMatrix;
       }
@@ -250,31 +257,20 @@ void main(){
         // Perspective divide
         vec3 finalPosition = p.xyz / p.w;
 
-#ifdef TBN_OPTIMIZED
         OutPackedVertex outVertex;
-        outVertex.posX = floatBitsToUint(finalPosition.x);
-        outVertex.posY = floatBitsToUint(finalPosition.y);
-        outVertex.posZ = floatBitsToUint(finalPosition.z);
-        outVertex.qtangent = encodeQTangentUI32(mat3(tangent, bitangent, normal));
-        outVertex.modelScaleXY = packHalf2x16(modelScale.xy);
-        outVertex.modelScaleZPad = packHalf2x16(vec2(modelScale.z, 0.0));
+        outVertex.posX = finalPosition.x;
+        outVertex.posY = finalPosition.y;
+        outVertex.posZ = finalPosition.z;
+        // Oct12 encode normal and tangent
+        uvec2 unxy = uvec2(ivec2(round(clamp(vertexOctEncode(normal), vec2(-1.0), vec2(1.0)) * 2047.0))) & uvec2(0xfffu);
+        uvec2 utxy = uvec2(ivec2(round(clamp(vertexOctEncode(tangent), vec2(-1.0), vec2(1.0)) * 2047.0))) & uvec2(0xfffu);
+        outVertex.tbnPart0 = (unxy.x << 0u) | (unxy.y << 12u) | ((utxy.x & 0xffu) << 24u);
+        // Bitangent sign: steal sign bit of modelScaleX half-float
+        outVertex.tbnPart1ModelScaleX = ((utxy.x >> 8u) & 0xfu) | (utxy.y << 4u) | 
+                                        (((packHalf2x16(vec2(modelScale.x, 0.0)) & 0x7fffu) | 
+                                         (uint((dot(normalize(cross(normal, tangent)), bitangent) < 0.0) ? 1u : 0u) << 15u)) << 16u);
+        outVertex.modelScaleYZ = packHalf2x16(modelScale.yz);
         outVertices[vertexIndex] = outVertex;
-#else
-        float tbnSign = (dot(normalize(cross(normal, tangent)), bitangent) < 0.0) ? -1.0 : 1.0;
-
-        outVertices[vertexIndex] = OutPackedVertex(
-          /*outPackedVertex.positionNormalXY =*/ uvec4(
-            uvec3(floatBitsToUint(finalPosition.xyz)), 
-            packSnorm2x16(normal.xy)
-          ),
-          /* outPackedVertex.normalZSignTangentXYZModelScaleXYZ = */uvec4(
-            packSnorm2x16(vec2(normal.z, tbnSign)), 
-            packSnorm2x16(tangent.xy), 
-            (packSnorm2x16(vec2(tangent.z, 0.0)) & 0xffffu) | (packHalf2x16(vec2(0.0, modelScale.x)) & 0xffff0000u),
-            packHalf2x16(modelScale.yz)
-          )
-        );
-#endif
 
         outGenerations[vertexIndex] = inGeneration;
 

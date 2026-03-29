@@ -1129,14 +1129,10 @@ addMeshFragmentZVariants(){
 # Add mesh fragment shader variants with different material source
 addMeshFragmentMaterialSourceVariants(){
   
-  # Material access per SSBO => the old-school way for older GPUs
-  addMeshFragmentZVariants "${1}_matssbo" "$2 -DUSE_MATERIAL_SSBO"
-
-  # Material access per buffer references (pointer-like raw access inside shaders) => the more modern way for newer GPUs
+  # Material access per buffer references (pointer-like raw access inside shaders)
   addMeshFragmentZVariants "${1}_matbufref" "$2 -DUSE_MATERIAL_BUFFER_REFERENCE"
 
-  # Material access per buffer references (pointer-like raw access inside shaders) => the more modern way for newer GPUs
-  # with raytracing support
+  # Material access per buffer references with raytracing support
   addMeshFragmentZVariants "${1}_matbufref_raytracing" "$2 -DUSE_MATERIAL_BUFFER_REFERENCE -DRAYTRACING"
 
 } 

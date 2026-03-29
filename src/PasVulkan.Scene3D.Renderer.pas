@@ -695,14 +695,10 @@ begin
 
  fRaytracingActive:=fScene3D.RaytracingActive;
 
- if fBufferDeviceAddress then begin
-  if fRaytracingActive then begin
-   fMeshFragTypeName:='matbufref_raytracing_';
-  end else begin
-   fMeshFragTypeName:='matbufref_';
-  end;
+ if fRaytracingActive then begin
+  fMeshFragTypeName:='matbufref_raytracing_';
  end else begin
-  fMeshFragTypeName:='matssbo_';
+  fMeshFragTypeName:='matbufref_';
  end;
 
 {FormatProperties:=fVulkanDevice.PhysicalDevice.GetFormatProperties(VK_FORMAT_B10G11R11_UFLOAT_PACK32);
