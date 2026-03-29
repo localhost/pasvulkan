@@ -6,24 +6,25 @@
 #extension GL_EXT_buffer_reference2 : enable
 #extension GL_EXT_buffer_reference_uvec2 : enable
 
-#include "vertex.glsl"
-
 // Packed vertex types matching TGPUCachedVertex and TGPUStaticVertex
 
-struct PackedCachedVertex { // TBN = Normal Oct (x: 12-bit, y: 12-bit), Tangent Oct (x: 12-bit, y: 12-bit), Bitangent sign (1-bit, stolen from ModelScaleX half sign) = 49 bits total
+struct PackedCachedVertex {
   float posX, posY, posZ;         // 12 bytes - position (3x float32)
-  uint tbnPart0;                  //  4 bytes - N.x(12) | N.y(12) | T.x_lo(8)
-  uint tbnPart1ModelScaleX;       //  4 bytes - T.x_hi(4) | T.y(12) | half(modelScaleX) with sign=bsign (16)
-  uint modelScaleYZ;              //  4 bytes - packHalf2x16(scaleY, scaleZ)
-}; // 24 bytes
+  uint normalXY;                  //  4 bytes - snorm16(normal.x) | snorm16(normal.y)
+  uint normalZSign;               //  4 bytes - snorm16(normal.z) | snorm16(bitangentSign)
+  uint tangentXY;                 //  4 bytes - snorm16(tangent.x) | snorm16(tangent.y)
+  uint tangentZModelScaleX;       //  4 bytes - snorm16(tangent.z) | half(modelScaleX)
+  uint modelScaleYZ;              //  4 bytes - half(modelScaleY) | half(modelScaleZ)
+}; // 32 bytes
 
 struct PackedStaticVertex {
-  float texCoord0X, texCoord0Y;   //  8 bytes - texcoord0 (2x float32)
-  float texCoord1X, texCoord1Y;   //  8 bytes - texcoord1 (2x float32)
+  vec2 texCoord0;                 //  8 bytes - (2x float32)
+  vec2 texCoord1;                 //  8 bytes - (2x float32)
   uint colorRG;                   //  4 bytes - half(r) | half(g)
   uint colorBA;                   //  4 bytes - half(b) | half(a)
   uint materialID;                //  4 bytes - uint32
-}; // 28 bytes, alignment 4, array stride 28
+  uint _unused;                   //  4 bytes
+}; // 32 bytes
 
 // Buffer reference types for vertex pulling via BDA
 
@@ -113,17 +114,22 @@ vec3 unpackPosition(in PackedCachedVertex v) {
   return vec3(v.posX, v.posY, v.posZ);
 }
 
-// Decode Oct12+Oct12+Sign1 TBN from PackedCachedVertex
-void unpackTBNOct12(in PackedCachedVertex v, out vec4 normalSign, out vec3 tangent) {
-  ivec2 inxy = ivec2(uvec2(v.tbnPart0) << uvec2(20u, 8u)) >> ivec2(20);
-  ivec2 itxy = ivec2(uvec2((((v.tbnPart0 >> 24u) & 0xffu) | ((v.tbnPart1ModelScaleX & 0xfu) << 8u)) << 20u, (v.tbnPart1ModelScaleX >> 4u) << 20u)) >> ivec2(20);
-  normalSign = vec4(vertexOctDecode(vec2(inxy.xy) / 2047.0), ((v.tbnPart1ModelScaleX & 0x80000000u) != 0u) ? -1.0 : 1.0);
-  tangent = vertexOctDecode(vec2(itxy.xy) / 2047.0);
+vec4 unpackNormalSign(in PackedCachedVertex v) {
+  vec2 xy = unpackSnorm2x16(v.normalXY);
+  vec2 zw = unpackSnorm2x16(v.normalZSign);
+  return vec4(xy, zw);
+}
+
+vec3 unpackTangent(in PackedCachedVertex v) {
+  vec2 xy = unpackSnorm2x16(v.tangentXY);
+  float z = unpackSnorm2x16(v.tangentZModelScaleX).x;
+  return vec3(xy, z);
 }
 
 vec3 unpackModelScale(in PackedCachedVertex v) {
-  // ModelScaleX: upper 16 bits of tbnPart1ModelScaleX, clear sign bit (stolen for bsign)
-  return vec3(unpackHalf2x16((v.tbnPart1ModelScaleX >> 16u) & 0x7fffu).x, unpackHalf2x16(v.modelScaleYZ));
+  float scaleX = unpackHalf2x16(v.tangentZModelScaleX).y;
+  vec2 scaleYZ = unpackHalf2x16(v.modelScaleYZ);
+  return vec3(scaleX, scaleYZ);
 }
 
 // Unpacking helpers for PackedStaticVertex

@@ -544,9 +544,10 @@ type EpvScene3D=class(Exception);
                TexCoord1:TpvVector2;                 // + 8 = 16 (must be full 32-bit float, for 0.0 .. 1.0 out-of-range texcoords)
                Color0:TpvHalfFloatVector4;           // + 8 = 24 (must be at least half-float for HDR)
                MaterialID:TpvUInt32;                 // + 4 = 28 (unsigned 32-bit material ID)
+               Unused0:TpvUInt32;                    // + 4 = 32
               );                                     //  ==   ==
-              true:(                                 //  28   28 per vertex
-               Padding:array[0..27] of TpvUInt8;
+              true:(                                 //  32   32 per vertex
+               Padding:array[0..31] of TpvUInt8;
               );
             end;
             PGPUStaticVertex=^TGPUStaticVertex;
@@ -554,13 +555,13 @@ type EpvScene3D=class(Exception);
             TGPUCachedVertex=packed record              // Minimum required cached vertex structure for to be GLTF 2.0 conformant
              case boolean of
               false:(
-               Position:TpvVector3;                   //  12   12 (32-bit float 3D vector)
-               TBNPart0:TpvUInt32;                    // + 4 = 16 (N.x(12) | N.y(12) | T.x_lo(8))
-               TBNPart1ModelScaleX:TpvUInt32;         // + 4 = 20 (T.x_hi(4) | T.y(12) | half(scaleX) with sign=bsign(16))
-               ModelScaleYZ:TpvUInt32;                // + 4 = 24 (packHalf2x16(scaleY, scaleZ))
-              );
-              true:(
-               Padding:array[0..23] of TpvUInt8;
+               Position:TpvVector3;                  //  12   12 (32-bit float 3D vector)
+               NormalSign:TInt16Vector4;             // + 8 = 20 (signed 16-bit Normal + TBN sign)
+               TangentXYZModelScaleX:TInt16Vector4;  // + 8 = 28 (signed 16-bit Tangent + model scale xy)
+               ModelScaleYZ:TpvHalfFloatVector2;     // + 4 = 32 (model scale yz)
+              );                                     //  ==   ==
+              true:(                                 //  32   32 per vertex
+               Padding:array[0..31] of TpvUInt8;
               );
             end;
             PGPUCachedVertex=^TGPUCachedVertex;
@@ -677,18 +678,13 @@ type EpvScene3D=class(Exception);
             TInFlightFrameParticleVertices=array[0..MaxInFlightFrames-1] of TParticleVertices; // 18MB in total at the moment
             PInFlightFrameParticleVertices=^TInFlightFrameParticleVertices;
             TJointBlock=packed record
-             public
-              function GetWeight(const aIndex:TpvInt32):TpvFloat; inline;
-              procedure SetWeightsFromFloats(const aW0,aW1,aW2,aW3:TpvFloat); inline;
-              function IsWeightZero(const aIndex:TpvInt32):Boolean; inline;
-             public
              case boolean of
               false:(
                Joints:TUInt32Vector4;                //  16 = 16
-               PackedWeights:TpvUInt32;              // + 4 = 20 (4x uint8 unorm packed weights)
+               Weights:TpvVector4;                   // +16 = 32
               );                                     //  ==   ==
-              true:(                                 //  20   20
-               Padding:array[0..19] of TpvUInt8;
+              true:(                                 //  32   32
+               Padding:array[0..31] of TpvUInt8;
               );
             end;
             PJointBlock=^TJointBlock;
@@ -1983,9 +1979,10 @@ type EpvScene3D=class(Exception);
                 Normal:TpvInt16Vector2;            // + 4   20 (signed 16-bit oct-encoded normal)
                 Tangent:TpvInt16Vector2;           // + 4   24 (signed 16-bit oct-encoded tangent)
                 Next:TpvUInt32;                    // + 4   28
-               );
-               true:(
-                Padding:array[0..27] of TpvUInt8;
+                Reserved:TpvUInt32;                // + 4   32 (for alignment)
+               );                                  //  ==   ==
+               true:(                              //  32   32 per vertex
+                Padding:array[0..31] of TpvUInt8;
                );
             end;
             PMorphTargetVertex=^TMorphTargetVertex;
@@ -4220,7 +4217,7 @@ type EpvScene3D=class(Exception);
                (TFaceCullingMode.None,TFaceCullingMode.None)
               );
              PVMFSignature:TPVMFSignature=('P','V','M','F');
-             PVMFVersion=TpVUInt32($0000000c);
+             PVMFVersion=TpVUInt32($00000009);
              ProceduralTextureImageHookDefault:TProceduralTextureImageHook=(Hook:nil;AllocateTexture:true);
              EmptyGPUInstanceData:TGPUInstanceData=
               (
@@ -5968,26 +5965,6 @@ begin
  result.Tangent:=OctDecode(Tangent);
  result.Normal:=OctDecode(Normal);
  result.Bitangent:=result.Normal.Cross(result.Tangent)*IfThen((Flags and (1 shl 0))<>0,-1.0,0.0);
-end;
-
-{ TpvScene3D.TJointBlock }
-
-function TpvScene3D.TJointBlock.GetWeight(const aIndex:TpvInt32):TpvFloat;
-begin
- result:=((PackedWeights shr (TpvUInt32(aIndex) shl 3)) and TpvUInt32($ff))/255.0;
-end;
-
-procedure TpvScene3D.TJointBlock.SetWeightsFromFloats(const aW0,aW1,aW2,aW3:TpvFloat);
-begin
- PackedWeights:=(TpvUInt32(Round(Min(Max(aW0,0.0),1.0)*255.0)) and TpvUInt32($ff)) or
-                ((TpvUInt32(Round(Min(Max(aW1,0.0),1.0)*255.0)) and TpvUInt32($ff)) shl 8) or
-                ((TpvUInt32(Round(Min(Max(aW2,0.0),1.0)*255.0)) and TpvUInt32($ff)) shl 16) or
-                ((TpvUInt32(Round(Min(Max(aW3,0.0),1.0)*255.0)) and TpvUInt32($ff)) shl 24);
-end;
-
-function TpvScene3D.TJointBlock.IsWeightZero(const aIndex:TpvInt32):Boolean;
-begin
- result:=((PackedWeights shr (TpvUInt32(aIndex) shl 3)) and TpvUInt32($ff))=0;
 end;
 
 { TpvScene3D.TMorphTargetVertex }
@@ -16314,6 +16291,7 @@ begin
       end else begin
        MorphTargetVertex^.Next:=TpvUInt32($ffffffff);
       end;
+      MorphTargetVertex^.Reserved:=0;
      end;
     end;
 
@@ -17249,12 +17227,10 @@ begin
              MaxJointBlocks^[JointBlockIndex].Joints[3]:=TemporaryJoints[JointBlockIndex][VertexIndex][3];
             end;
             if VertexIndex<length(TemporaryWeights[JointBlockIndex]) then begin
-             MaxJointBlocks^[JointBlockIndex].SetWeightsFromFloats(
-              TemporaryWeights[JointBlockIndex][VertexIndex][0],
-              TemporaryWeights[JointBlockIndex][VertexIndex][1],
-              TemporaryWeights[JointBlockIndex][VertexIndex][2],
-              TemporaryWeights[JointBlockIndex][VertexIndex][3]
-             );
+             MaxJointBlocks^[JointBlockIndex].Weights.x:=TemporaryWeights[JointBlockIndex][VertexIndex][0];
+             MaxJointBlocks^[JointBlockIndex].Weights.y:=TemporaryWeights[JointBlockIndex][VertexIndex][1];
+             MaxJointBlocks^[JointBlockIndex].Weights.z:=TemporaryWeights[JointBlockIndex][VertexIndex][2];
+             MaxJointBlocks^[JointBlockIndex].Weights.w:=TemporaryWeights[JointBlockIndex][VertexIndex][3];
             end;
            end;
            {if not MaxJointBlocksHashMap.TryGet(MaxJointBlocks^,Vertex^.JointBlockBaseIndex) then }begin
@@ -17533,6 +17509,7 @@ begin
            end else begin
             MorphTargetVertex^.Next:=TpvUInt32($ffffffff);
            end;
+           MorphTargetVertex^.Reserved:=0;
           end;
          end;
         end;
@@ -19599,25 +19576,25 @@ begin
 
   for Index:=0 to Min(fJointBlocks.Count,length(fJointBlockOffsets))-1 do begin
 
-   if fJointBlocks.ItemArray[Index].IsWeightZero(0) then begin
+   if IsZero(fJointBlocks.ItemArray[Index].Weights.x) then begin
     fJointBlocks.ItemArray[Index].Joints[0]:=0;
    end else begin
     inc(fJointBlocks.ItemArray[Index].Joints[0],fJointBlockOffsets[Index]);
    end;
 
-   if fJointBlocks.ItemArray[Index].IsWeightZero(1) then begin
+   if IsZero(fJointBlocks.ItemArray[Index].Weights.y) then begin
     fJointBlocks.ItemArray[Index].Joints[1]:=0;
    end else begin
     inc(fJointBlocks.ItemArray[Index].Joints[1],fJointBlockOffsets[Index]);
    end;
 
-   if fJointBlocks.ItemArray[Index].IsWeightZero(2) then begin
+   if IsZero(fJointBlocks.ItemArray[Index].Weights.z) then begin
     fJointBlocks.ItemArray[Index].Joints[2]:=0;
    end else begin
     inc(fJointBlocks.ItemArray[Index].Joints[2],fJointBlockOffsets[Index]);
    end;
 
-   if fJointBlocks.ItemArray[Index].IsWeightZero(3) then begin
+   if IsZero(fJointBlocks.ItemArray[Index].Weights.w) then begin
     fJointBlocks.ItemArray[Index].Joints[3]:=0;
    end else begin
     inc(fJointBlocks.ItemArray[Index].Joints[3],fJointBlockOffsets[Index]);
@@ -20237,7 +20214,7 @@ begin
          for JointIndex:=0 to 3 do begin
 
           Joint:=JointBlock^.Joints[JointIndex];
-          Weight:=JointBlock^.GetWeight(JointIndex);
+          Weight:=JointBlock^.Weights[JointIndex];
 
           // Check if joint is valid and weight is not zero
           if (Joint>=0) and not IsZero(Weight) then begin
@@ -26991,6 +26968,7 @@ begin
     DstStaticVertex^.TexCoord1:=SrcVertex^.TexCoord1;
     DstStaticVertex^.Color0:=SrcVertex^.Color0;
     DstStaticVertex^.MaterialID:=fMaterialMap[SrcVertex^.MaterialID];
+    DstStaticVertex^.Unused0:=0;
 
    end;
 
@@ -30239,7 +30217,7 @@ begin
      for JointBlockIndex:=Vertex^.JointBlockBaseIndex to (Vertex^.JointBlockBaseIndex+Vertex^.CountJointBlocks)-1 do begin
       JointBlock:=@fGroup.fJointBlocks.ItemArray[JointBlockIndex];
       for JointIndex:=0 to 3 do begin
-       Matrix:=Matrix+((fNodeMatrices[JointBlock^.Joints[JointIndex]]*InverseMatrix)*JointBlock^.GetWeight(JointIndex));
+       Matrix:=Matrix+((fNodeMatrices[JointBlock^.Joints[JointIndex]]*InverseMatrix)*JointBlock^.Weights[JointIndex]);
       end;
      end;
      ModelNodeMatrix:=Matrix*ModelNodeMatrix;
@@ -32371,6 +32349,7 @@ begin
      DstStaticVertex^.TexCoord1:=SrcVertex^.TexCoord1;
      DstStaticVertex^.Color0:=SrcVertex^.Color0;
      DstStaticVertex^.MaterialID:=fMaterialMap[SrcVertex^.MaterialID];
+     //DstStaticVertex^.Unused0:=0;
 
      inc(SrcVertex);
 
@@ -32475,7 +32454,7 @@ begin
          for JointBlockIndex:=Vertex^.JointBlockBaseIndex to (Vertex^.JointBlockBaseIndex+Vertex^.CountJointBlocks)-1 do begin
           JointBlock:=@fGroup.fJointBlocks.ItemArray[JointBlockIndex];
           for JointIndex:=0 to 3 do begin
-           Matrix:=Matrix+((fNodeMatrices[JointBlock^.Joints[JointIndex]]*InverseMatrix)*JointBlock^.GetWeight(JointIndex));
+           Matrix:=Matrix+((fNodeMatrices[JointBlock^.Joints[JointIndex]]*InverseMatrix)*JointBlock^.Weights[JointIndex]);
           end;
          end;
          ModelNodeMatrix:=Matrix*ModelNodeMatrix;

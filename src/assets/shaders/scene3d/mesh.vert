@@ -104,12 +104,11 @@ void main() {
 
   // Unpack vertex attributes
   vec3 position = unpackPosition(cv);
-  vec4 normalSign;
-  vec3 tangent;
-  unpackTBNOct12(cv, normalSign, tangent);
+  vec4 normalSign = unpackNormalSign(cv);
+  vec3 tangent = unpackTangent(cv);
   vec3 modelScale = unpackModelScale(cv);
-  vec2 texCoord0 = vec2(sv.texCoord0X, sv.texCoord0Y);
-  vec2 texCoord1 = vec2(sv.texCoord1X, sv.texCoord1Y);
+  vec2 texCoord0 = sv.texCoord0;
+  vec2 texCoord1 = sv.texCoord1;
   vec4 color0 = unpackColor0(sv);
   uint materialID = sv.materialID;
 
