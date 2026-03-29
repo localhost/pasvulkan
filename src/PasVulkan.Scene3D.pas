@@ -389,14 +389,6 @@ type EpvScene3D=class(Exception);
             TFreeQueue=TpvDynamicArrayList<TFreeQueueItem>;
             TGlobalVulkanInstanceCounts=array[0..MaxInFlightFrames-1] of TPasMPUInt32;
             PGlobalVulkanInstanceCounts=^TGlobalVulkanInstanceCounts;
-            TGlobalVulkanInstanceMatrixBuffers=array[0..MaxInFlightFrames-1] of TpvVulkanBuffer;
-            TGlobalVulkanInstanceMatrixDynamicArray=TpvDynamicArray<TpvMatrix4x4>;
-            PGlobalVulkanInstanceMatrixDynamicArray=^TGlobalVulkanInstanceMatrixDynamicArray;
-            TGlobalVulkanInstanceMatrixDynamicArrays=array[0..MaxInFlightFrames-1] of TGlobalVulkanInstanceMatrixDynamicArray;
-            TGlobalVulkanInstanceDataIndexBuffers=array[0..MaxInFlightFrames-1] of TpvVulkanBuffer;
-            TGlobalVulkanInstanceDataIndexDynamicArray=TpvDynamicArray<TpvUInt32>;
-            PGlobalVulkanInstanceDataIndexDynamicArray=^TGlobalVulkanInstanceDataIndexDynamicArray;
-            TGlobalVulkanInstanceDataIndexDynamicArrays=array[0..MaxInFlightFrames-1] of TGlobalVulkanInstanceDataIndexDynamicArray;
             { TGPUGlobalBDAPointers - 48 bytes, single instance in SSBO at binding 7 }
             { Contains the global buffer device addresses shared by all draws (big-buffer mode). }
             { For future per-group buffers, these would move back into TGPUDrawInfo. }
@@ -4335,10 +4327,6 @@ type EpvScene3D=class(Exception);
        fGlobalBoundingSphereVulkanDescriptorPool:TpvVulkanDescriptorPool;
        fGlobalBoundingSphereVulkanDescriptorSets:TGlobalBoundingSphereVulkanDescriptorSets;
        fGlobalVulkanInstanceCounts:TGlobalVulkanInstanceCounts;
-       fGlobalVulkanInstanceMatrixDynamicArrays:TGlobalVulkanInstanceMatrixDynamicArrays;
-       //fGlobalVulkanInstanceMatrixBuffers:TGlobalVulkanInstanceMatrixBuffers; // Dead: replaced by DrawInfo SSBO
-       fGlobalVulkanInstanceDataIndexDynamicArrays:TGlobalVulkanInstanceDataIndexDynamicArrays;
-       //fGlobalVulkanInstanceDataIndexBuffers:TGlobalVulkanInstanceDataIndexBuffers; // Dead: replaced by DrawInfo SSBO
        fGlobalVulkanDrawInfoDynamicArrays:TGlobalVulkanDrawInfoDynamicArrays;
        fGlobalVulkanDrawInfoBuffers:TGlobalVulkanDrawInfoBuffers;
        fGlobalVulkanBDAPointersBuffers:TGlobalVulkanBDAPointersBuffers;
@@ -4839,7 +4827,6 @@ type EpvScene3D=class(Exception);
       public
        property BoundingBox:TpvAABB read fBoundingBox;
        property InFlightFrameBoundingBoxes:TInFlightFrameAABBs read fInFlightFrameBoundingBoxes;
-       //property GlobalVulkanInstanceMatrixBuffers:TGlobalVulkanInstanceMatrixBuffers read fGlobalVulkanInstanceMatrixBuffers; // Dead: replaced by DrawInfo SSBO
        property GlobalVulkanDescriptorSets:TGlobalVulkanDescriptorSets read fGlobalVulkanDescriptorSets;
        property GlobalBoundingSphereVulkanDescriptorSets:TGlobalBoundingSphereVulkanDescriptorSets read fGlobalBoundingSphereVulkanDescriptorSets;
        property PrimaryLightDirection:TpvVector3 read fPrimaryLightDirection write fPrimaryLightDirection;
@@ -4906,8 +4893,6 @@ type EpvScene3D=class(Exception);
        property AtmosphereGlobals:TObject read fAtmosphereGlobals;
       public
        property GlobalVulkanInstanceCounts:TGlobalVulkanInstanceCounts read fGlobalVulkanInstanceCounts write fGlobalVulkanInstanceCounts;
-       property GlobalVulkanInstanceMatrixDynamicArrays:TGlobalVulkanInstanceMatrixDynamicArrays read fGlobalVulkanInstanceMatrixDynamicArrays;
-       property GlobalVulkanGPUInstanceDataIndexDynamicArrays:TGlobalVulkanInstanceDataIndexDynamicArrays read fGlobalVulkanInstanceDataIndexDynamicArrays;
        property GlobalRenderInstanceCullDataDynamicArrays:TGlobalRenderInstanceCullDataDynamicArrays read fGlobalRenderInstanceCullDataDynamicArrays;
       public
        property LastProcessFrameTimerQueryResults:TpvTimerQuery.TResults read fLastProcessFrameTimerQueryResults;
@@ -33068,8 +33053,6 @@ procedure TpvScene3D.TGroup.TInstance.PreparePerInFlightFrameRenderInstances(con
 var PerInFlightFrameRenderInstanceIndex,FrustumIndex,ViewIndex,InstancesCount:TpvSizeInt;
     ViewPotentiallyVisibleSetNodeIndex:TpvScene3D.TPotentiallyVisibleSet.TNodeIndex;
     DoCulling,PotentiallyVisible:boolean;
-    GlobalVulkanInstanceMatrixDynamicArray:PGlobalVulkanInstanceMatrixDynamicArray;
-    GlobalVulkanGPUInstanceDataIndexDynamicArray:PGlobalVulkanInstanceDataIndexDynamicArray;
     GlobalVulkanDrawInfoDynamicArray:PGlobalVulkanDrawInfoDynamicArray;
     GlobalRenderInstanceCullDataDynamicArray:PGlobalRenderInstanceCullDataDynamicArray;
     GlobalRenderInstanceCullData:PCullData;
@@ -33081,17 +33064,13 @@ begin
 
  if fUseRenderInstances then begin
 
-  GlobalVulkanInstanceMatrixDynamicArray:=@fSceneInstance.fGlobalVulkanInstanceMatrixDynamicArrays[aInFlightFrameIndex];
-
-  GlobalVulkanGPUInstanceDataIndexDynamicArray:=@fSceneInstance.fGlobalVulkanInstanceDataIndexDynamicArrays[aInFlightFrameIndex];
-
   GlobalVulkanDrawInfoDynamicArray:=@fSceneInstance.fGlobalVulkanDrawInfoDynamicArrays[aInFlightFrameIndex];
 
   GlobalRenderInstanceCullDataDynamicArray:=@fSceneInstance.fGlobalRenderInstanceCullDataDynamicArrays[aInFlightFrameIndex];
 
   GlobalVulkanInstanceCount:=@fSceneInstance.fGlobalVulkanInstanceCounts[aInFlightFrameIndex];
 
-  aFirstInstance:=GlobalVulkanInstanceCount^; //GlobalVulkanInstanceMatrixDynamicArray^.Count shr 1;
+  aFirstInstance:=GlobalVulkanInstanceCount^;
 
   InstancesCount:=0;
 
@@ -33134,9 +33113,6 @@ begin
    end;
 
    if PotentiallyVisible then begin
-    GlobalVulkanInstanceMatrixDynamicArray^.Add(PerInFlightFrameRenderInstance^.ModelMatrix);
-    GlobalVulkanInstanceMatrixDynamicArray^.Add(PerInFlightFrameRenderInstance^.PreviousModelMatrix);
-    GlobalVulkanGPUInstanceDataIndexDynamicArray^.Add(PerInFlightFrameRenderInstance^.InstanceDataIndex);
     // DrawInfo entry for this instanced render instance (BDA pointers filled later per frame)
     FillChar(GlobalVulkanDrawInfoDynamicArray^.AddNew^,SizeOf(TGPUDrawInfo),#0);
     CurrentDrawInfo:=@GlobalVulkanDrawInfoDynamicArray^.ItemArray[GlobalVulkanDrawInfoDynamicArray^.Count-1];
@@ -33949,17 +33925,6 @@ begin
  for Index:=0 to fCountInFlightFrames-1 do begin
 
   fGlobalVulkanInstanceCounts[Index]:=1;
-
-  fGlobalVulkanInstanceMatrixDynamicArrays[Index].Initialize;
-  fGlobalVulkanInstanceMatrixDynamicArrays[Index].Resize(65536);
-  fGlobalVulkanInstanceMatrixDynamicArrays[Index].Count:=0;
-  fGlobalVulkanInstanceMatrixDynamicArrays[Index].Add(TpvMatrix4x4.Identity);
-  fGlobalVulkanInstanceMatrixDynamicArrays[Index].Add(TpvMatrix4x4.Identity);
-
-  fGlobalVulkanInstanceDataIndexDynamicArrays[Index].Initialize;
-  fGlobalVulkanInstanceDataIndexDynamicArrays[Index].Resize(65536);
-  fGlobalVulkanInstanceDataIndexDynamicArrays[Index].Count:=65536;
-  fGlobalVulkanInstanceDataIndexDynamicArrays[Index].Add(0);
 
   fGlobalVulkanDrawInfoDynamicArrays[Index].Initialize;
   fGlobalVulkanDrawInfoDynamicArrays[Index].Resize(65536);
@@ -35220,7 +35185,6 @@ begin
  FreeAndNil(fGlobalVulkanDescriptorPool);
 
  for Index:=0 to fCountInFlightFrames-1 do begin
-  //FreeAndNil(fGlobalVulkanInstanceMatrixBuffers[Index]); // Dead: replaced by DrawInfo SSBO
   FreeAndNil(fGlobalVulkanDrawInfoBuffers[Index]);
   FreeAndNil(fGlobalVulkanBDAPointersBuffers[Index]);
  end;
@@ -35470,8 +35434,6 @@ begin
  fVulkanJointBlockBufferData.Finalize;
 
  for Index:=0 to fCountInFlightFrames-1 do begin
-  fGlobalVulkanInstanceMatrixDynamicArrays[Index].Finalize;
-  fGlobalVulkanInstanceDataIndexDynamicArrays[Index].Finalize;
   fGlobalVulkanDrawInfoDynamicArrays[Index].Finalize;
   fGlobalRenderInstanceCullDataDynamicArrays[Index].Finalize;
   fGlobalBoundingSphereDynamicArrays[Index]:=nil;
@@ -36680,29 +36642,6 @@ begin
 
           end;}
 
-          (* // Dead: replaced by DrawInfo SSBO
-          for Index:=0 to fCountInFlightFrames-1 do begin
-           fGlobalVulkanInstanceMatrixBuffers[Index]:=TpvVulkanBuffer.Create(fVulkanDevice,
-                                                                             Max(1,length(fGlobalVulkanInstanceMatrixDynamicArrays[Index].Items))*SizeOf(TpvMatrix4x4),
-                                                                             TVkBufferUsageFlags(VK_BUFFER_USAGE_TRANSFER_DST_BIT) or TVkBufferUsageFlags(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT),
-                                                                             TVkSharingMode(VK_SHARING_MODE_EXCLUSIVE),
-                                                                             [],
-                                                                             TVkMemoryPropertyFlags(VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT),
-                                                                             TVkMemoryPropertyFlags(VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) or TVkMemoryPropertyFlags(VK_MEMORY_PROPERTY_HOST_COHERENT_BIT),
-                                                                             0,
-                                                                             0,
-                                                                             0,
-                                                                             0,
-                                                                             0,
-                                                                             0,
-                                                                             [TpvVulkanBufferFlag.PersistentMapped],
-                                                                             0,
-                                                                             pvAllocationGroupIDScene3DDynamic,
-                                                                             'TpvScene3D.fGlobalVulkanInstanceMatrixBuffers['+IntToStr(Index)+']');
-           fVulkanDevice.DebugUtils.SetObjectName(fGlobalVulkanInstanceMatrixBuffers[Index].Handle,VK_OBJECT_TYPE_BUFFER,'TpvScene3D.fGlobalVulkanInstanceMatrixBuffers['+IntToStr(Index)+']');
-          end;
-          *)
-
           for Index:=0 to fCountInFlightFrames-1 do begin
            fGlobalVulkanDrawInfoBuffers[Index]:=TpvVulkanBuffer.Create(fVulkanDevice,
                                                                         Max(1,fGlobalVulkanDrawInfoDynamicArrays[Index].Count)*SizeOf(TGPUDrawInfo),
@@ -36877,29 +36816,6 @@ begin
                                                                                  'fGlobalVulkanViewUniformStagingBuffers');
 
           end;}
-
-          (* // Dead: replaced by DrawInfo SSBO
-          for Index:=0 to fCountInFlightFrames-1 do begin
-           fGlobalVulkanInstanceMatrixBuffers[Index]:=TpvVulkanBuffer.Create(fVulkanDevice,
-                                                                             Max(1,length(fGlobalVulkanInstanceMatrixDynamicArrays[Index].Items))*SizeOf(TpvMatrix4x4),
-                                                                             TVkBufferUsageFlags(VK_BUFFER_USAGE_TRANSFER_DST_BIT) or TVkBufferUsageFlags(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT),
-                                                                             TVkSharingMode(VK_SHARING_MODE_EXCLUSIVE),
-                                                                             [],
-                                                                             0,
-                                                                             TVkMemoryPropertyFlags(VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT),
-                                                                             0,
-                                                                             TVkMemoryPropertyFlags(VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT),
-                                                                             0,
-                                                                             0,
-                                                                             0,
-                                                                             0,
-                                                                             [TpvVulkanBufferFlag.OwnSingleMemoryChunk,TpvVulkanBufferFlag.DedicatedAllocation],
-                                                                             0,
-                                                                             pvAllocationGroupIDScene3DDynamic,
-                                                                             'TpvScene3D.fGlobalVulkanInstanceMatrixBuffers['+IntToStr(Index)+']');
-           fVulkanDevice.DebugUtils.SetObjectName(fGlobalVulkanInstanceMatrixBuffers[Index].Handle,VK_OBJECT_TYPE_BUFFER,'TpvScene3D.fGlobalVulkanInstanceMatrixBuffers['+IntToStr(Index)+']');
-          end;
-          *)
 
           for Index:=0 to fCountInFlightFrames-1 do begin
            fGlobalVulkanDrawInfoBuffers[Index]:=TpvVulkanBuffer.Create(fVulkanDevice,
@@ -37333,81 +37249,6 @@ begin
 
              end;
 
-             (* // Dead: replaced by DrawInfo SSBO
-             case fBufferStreamingMode of
-
-              TBufferStreamingMode.Direct:begin
-
-               fGlobalVulkanInstanceDataIndexBuffers[Index]:=TpvVulkanBuffer.Create(fVulkanDevice,
-                                                                                    Max(1,fGlobalVulkanInstanceDataIndexDynamicArrays[Index].Count)*SizeOf(TVkUInt32),
-                                                                                    TVkBufferUsageFlags(VK_BUFFER_USAGE_TRANSFER_DST_BIT) or
-                                                                                    TVkBufferUsageFlags(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT) or
-                                                                                    TVkBufferUsageFlags(VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT_KHR),
-                                                                                    TVkSharingMode(VK_SHARING_MODE_EXCLUSIVE),
-                                                                                    [],
-                                                                                    TVkMemoryPropertyFlags(VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT),
-                                                                                    TVkMemoryPropertyFlags(VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) or TVkMemoryPropertyFlags(VK_MEMORY_PROPERTY_HOST_COHERENT_BIT),
-                                                                                    0,
-                                                                                    0,
-                                                                                    0,
-                                                                                    0,
-                                                                                    0,
-                                                                                    0,
-                                                                                    [TpvVulkanBufferFlag.PersistentMapped,TpvVulkanBufferFlag.OwnSingleMemoryChunk,TpvVulkanBufferFlag.DedicatedAllocation],
-                                                                                    0,
-                                                                                    pvAllocationGroupIDScene3DDynamic,
-                                                                                    'TpvScene3D.fGlobalVulkanInstanceDataIndexBuffers['+IntToStr(Index)+']');
-
-                fVulkanDevice.DebugUtils.SetObjectName(fGlobalVulkanInstanceDataIndexBuffers[Index].Handle,VK_OBJECT_TYPE_BUFFER,'TpvScene3D.fGlobalVulkanInstanceDataIndexBuffers['+IntToStr(Index)+']');
-
-                fVulkanDevice.MemoryStaging.Zero(UniversalQueue,
-                                                 UniversalCommandBuffer,
-                                                 UniversalFence,
-                                                 fGlobalVulkanInstanceDataIndexBuffers[Index],
-                                                 0,
-                                                 fGlobalVulkanInstanceDataIndexBuffers[Index].Size);
-              end;
-
-              TBufferStreamingMode.Staging:begin
-
-               fGlobalVulkanInstanceDataIndexBuffers[Index]:=TpvVulkanBuffer.Create(fVulkanDevice,
-                                                                                    Max(1,fGlobalVulkanInstanceDataIndexDynamicArrays[Index].Count)*SizeOf(TVkUInt32),
-                                                                                    TVkBufferUsageFlags(VK_BUFFER_USAGE_TRANSFER_DST_BIT) or
-                                                                                    TVkBufferUsageFlags(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT) or
-                                                                                    TVkBufferUsageFlags(VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT_KHR),
-                                                                                    TVkSharingMode(VK_SHARING_MODE_EXCLUSIVE),
-                                                                                    [],
-                                                                                    0,
-                                                                                    TVkMemoryPropertyFlags(VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT),
-                                                                                    0,
-                                                                                    TVkMemoryPropertyFlags(VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT),
-                                                                                    0,
-                                                                                    0,
-                                                                                    0,
-                                                                                    0,
-                                                                                    [TpvVulkanBufferFlag.OwnSingleMemoryChunk,TpvVulkanBufferFlag.DedicatedAllocation],
-                                                                                    0,
-                                                                                    pvAllocationGroupIDScene3DDynamic,
-                                                                                    'TpvScene3D.fGlobalVulkanInstanceDataIndexBuffers['+IntToStr(Index)+']');
-
-                fVulkanDevice.DebugUtils.SetObjectName(fGlobalVulkanInstanceDataIndexBuffers[Index].Handle,VK_OBJECT_TYPE_BUFFER,'TpvScene3D.fGlobalVulkanInstanceDataIndexBuffers['+IntToStr(Index)+']');
-
-                fVulkanDevice.MemoryStaging.Zero(UniversalQueue,
-                                                 UniversalCommandBuffer,
-                                                 UniversalFence,
-                                                 fGlobalVulkanInstanceDataIndexBuffers[Index],
-                                                 0,
-                                                 fGlobalVulkanInstanceDataIndexBuffers[Index].Size);
-
-              end;
-
-              else begin
-               Assert(false);
-              end;
-
-             end;
-             *)
-
             end;
 
            finally
@@ -37514,15 +37355,6 @@ begin
                                                                  [fVulkanGPUInstanceDataBuffers[Index].DescriptorBufferInfo],
                                                                  [],
                                                                  false);
-         // InstanceDataIndexBuffer - REMOVED: now part of DrawInfo SSBO at binding 0
-{        fGlobalVulkanDescriptorSets[Index].WriteToDescriptorSet(7,
-                                                                 0,
-                                                                 1,
-                                                                 TVkDescriptorType(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER),
-                                                                 [],
-                                                                 [fGlobalVulkanInstanceDataIndexBuffers[Index].DescriptorBufferInfo],
-                                                                 [],
-                                                                 false);}
          // GlobalBDAPointers at binding 7
          fGlobalVulkanDescriptorSets[Index].WriteToDescriptorSet(7,
                                                                  0,
@@ -37652,8 +37484,6 @@ begin
 
       FreeAndNil(fVulkanGPUInstanceDataBuffers[Index]);
 
-      //FreeAndNil(fGlobalVulkanInstanceDataIndexBuffers[Index]); // Dead: replaced by DrawInfo SSBO
-
      end;
 
      for Index:=0 to fCountInFlightFrames-1 do begin
@@ -37751,28 +37581,11 @@ begin
 end;
 
 procedure TpvScene3D.ResetFrame(const aInFlightFrameIndex:TpvSizeInt);
-var GlobalVulkanInstanceMatrixDynamicArray:PGlobalVulkanInstanceMatrixDynamicArray;
-    GlobalVulkanInstanceDataIndexDynamicArray:PGlobalVulkanInstanceDataIndexDynamicArray;
-    GlobalVulkanDrawInfoDynamicArray:PGlobalVulkanDrawInfoDynamicArray;
+var GlobalVulkanDrawInfoDynamicArray:PGlobalVulkanDrawInfoDynamicArray;
     GlobalRenderInstanceCullDataDynamicArray:PGlobalRenderInstanceCullDataDynamicArray;
 begin
 
  fGlobalVulkanInstanceCounts[aInFlightFrameIndex]:=1;
-
- GlobalVulkanInstanceMatrixDynamicArray:=@fGlobalVulkanInstanceMatrixDynamicArrays[aInFlightFrameIndex];
- if GlobalVulkanInstanceMatrixDynamicArray^.Count<2 then begin
-  GlobalVulkanInstanceMatrixDynamicArray^.Count:=0;
-  GlobalVulkanInstanceMatrixDynamicArray^.Add(TpvMatrix4x4.Identity);
-  GlobalVulkanInstanceMatrixDynamicArray^.Add(TpvMatrix4x4.Identity);
- end;
- GlobalVulkanInstanceMatrixDynamicArray^.Count:=2;
-
- GlobalVulkanInstanceDataIndexDynamicArray:=@fGlobalVulkanInstanceDataIndexDynamicArrays[aInFlightFrameIndex];
- if GlobalVulkanInstanceDataIndexDynamicArray^.Count<1 then begin
-  GlobalVulkanInstanceDataIndexDynamicArray^.Count:=0;
-  GlobalVulkanInstanceDataIndexDynamicArray.Add(0);
- end;
- GlobalVulkanInstanceDataIndexDynamicArray^.Count:=1;
 
  GlobalVulkanDrawInfoDynamicArray:=@fGlobalVulkanDrawInfoDynamicArrays[aInFlightFrameIndex];
  if GlobalVulkanDrawInfoDynamicArray^.Count<1 then begin
@@ -39759,215 +39572,6 @@ begin
    end;
 
   end;
-
-  (* // Dead: replaced by DrawInfo SSBO - InstanceDataIndex resize/update in ProcessFrame
-  if fGlobalVulkanInstanceDataIndexDynamicArrays[aInFlightFrameIndex].Count>0 then begin
-
-   if assigned(fGlobalVulkanInstanceDataIndexBuffers[aInFlightFrameIndex]) then begin
-
-    Size:=Max(1,fGlobalVulkanInstanceDataIndexDynamicArrays[aInFlightFrameIndex].Count)*SizeOf(TpvUInt32);
-    if fGlobalVulkanInstanceDataIndexBuffers[aInFlightFrameIndex].Size<Size then begin
-
-     FreeAndNil(fGlobalVulkanInstanceDataIndexBuffers[aInFlightFrameIndex]);
-
-     case fBufferStreamingMode of
-
-      TBufferStreamingMode.Direct:begin
-       fGlobalVulkanInstanceDataIndexBuffers[aInFlightFrameIndex]:=TpvVulkanBuffer.Create(fVulkanDevice,
-                                                                                          Size,
-                                                                                          TVkBufferUsageFlags(VK_BUFFER_USAGE_TRANSFER_DST_BIT) or
-                                                                                          TVkBufferUsageFlags(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT) or
-                                                                                          TVkBufferUsageFlags(VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT_KHR),
-                                                                                          TVkSharingMode(VK_SHARING_MODE_EXCLUSIVE),
-                                                                                          [],
-                                                                                          TVkMemoryPropertyFlags(VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT),
-                                                                                          TVkMemoryPropertyFlags(VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) or TVkMemoryPropertyFlags(VK_MEMORY_PROPERTY_HOST_COHERENT_BIT),
-                                                                                          0,
-                                                                                          0,
-                                                                                          0,
-                                                                                          0,
-                                                                                          0,
-                                                                                          0,
-                                                                                          [TpvVulkanBufferFlag.PersistentMapped,TpvVulkanBufferFlag.OwnSingleMemoryChunk,TpvVulkanBufferFlag.DedicatedAllocation],
-                                                                                          0,
-                                                                                          pvAllocationGroupIDScene3DDynamic,
-                                                                                          'TpvScene3D.fGlobalVulkanInstanceDataIndexBuffers['+IntToStr(aInFlightFrameIndex)+']');
-       fVulkanDevice.DebugUtils.SetObjectName(fGlobalVulkanInstanceDataIndexBuffers[aInFlightFrameIndex].Handle,VK_OBJECT_TYPE_BUFFER,'TpvScene3D.fGlobalVulkanInstanceDataIndexBuffers['+IntToStr(aInFlightFrameIndex)+']');
-      end;
-
-      TBufferStreamingMode.Staging:begin
-       fGlobalVulkanInstanceDataIndexBuffers[aInFlightFrameIndex]:=TpvVulkanBuffer.Create(fVulkanDevice,
-                                                                                          Size,
-                                                                                          TVkBufferUsageFlags(VK_BUFFER_USAGE_TRANSFER_DST_BIT) or
-                                                                                          TVkBufferUsageFlags(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT) or
-                                                                                          TVkBufferUsageFlags(VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT_KHR),
-                                                                                          TVkSharingMode(VK_SHARING_MODE_EXCLUSIVE),
-                                                                                          [],
-                                                                                          0,
-                                                                                          TVkMemoryPropertyFlags(VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT),
-                                                                                          0,
-                                                                                          TVkMemoryPropertyFlags(VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT),
-                                                                                          0,
-                                                                                          0,
-                                                                                          0,
-                                                                                          0,
-                                                                                          [TpvVulkanBufferFlag.OwnSingleMemoryChunk,TpvVulkanBufferFlag.DedicatedAllocation],
-                                                                                          0,
-                                                                                          pvAllocationGroupIDScene3DDynamic,
-                                                                                          'TpvScene3D.fGlobalVulkanInstanceDataIndexBuffers['+IntToStr(aInFlightFrameIndex)+']');
-       fVulkanDevice.DebugUtils.SetObjectName(fGlobalVulkanInstanceDataIndexBuffers[aInFlightFrameIndex].Handle,VK_OBJECT_TYPE_BUFFER,'TpvScene3D.fGlobalVulkanInstanceDataIndexBuffers['+IntToStr(aInFlightFrameIndex)+']');
-      end;
-
-      else begin
-       Assert(false);
-      end;
-
-     end;
-
-     //fGlobalVulkanDescriptorSets[aInFlightFrameIndex].WriteToDescriptorSet(7,
-     //                                                                      0,
-     //                                                                      1,
-     //                                                                      TVkDescriptorType(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER),
-     //                                                                      [],
-     //                                                                      [fGlobalVulkanInstanceDataIndexBuffers[aInFlightFrameIndex].DescriptorBufferInfo],
-     //                                                                      [],
-     //                                                                      true);
-
-    end;
-
-    case fBufferStreamingMode of
-
-     TBufferStreamingMode.Direct:begin
-      fGlobalVulkanInstanceDataIndexBuffers[aInFlightFrameIndex].UpdateData(fGlobalVulkanInstanceDataIndexDynamicArrays[aInFlightFrameIndex].ItemArray[0],
-                                                                                  0,
-                                                                                  fGlobalVulkanInstanceDataIndexDynamicArrays[aInFlightFrameIndex].Count*SizeOf(TpvUInt32),
-                                                                                  FlushUpdateData
-                                                                                 );
-     end;
-
-     TBufferStreamingMode.Staging:begin
-      fVulkanDevice.MemoryStaging.Upload(fVulkanStagingQueue,
-                                         fVulkanStagingCommandBuffer,
-                                         fVulkanStagingFence,
-                                         fGlobalVulkanInstanceDataIndexDynamicArrays[aInFlightFrameIndex].ItemArray[0],
-                                         fGlobalVulkanInstanceDataIndexBuffers[aInFlightFrameIndex],
-                                         0,
-                                         fGlobalVulkanInstanceDataIndexDynamicArrays[aInFlightFrameIndex].Count*SizeOf(TpvUInt32));
-     end;
-
-     else begin
-      Assert(false);
-     end;
-
-    end;
-
-   end;
-
-  end;
-  *)
-
-  (* // Dead: replaced by DrawInfo SSBO - InstanceMatrix resize/update in ProcessFrame
-  if fGlobalVulkanInstanceMatrixDynamicArrays[aInFlightFrameIndex].Count>0 then begin
-
-   if assigned(fGlobalVulkanInstanceMatrixBuffers[aInFlightFrameIndex]) then begin
-
-    Size:=Max(1,length(fGlobalVulkanInstanceMatrixDynamicArrays[aInFlightFrameIndex].Items))*SizeOf(TpvMatrix4x4);
-    if fGlobalVulkanInstanceMatrixBuffers[aInFlightFrameIndex].Size<Size then begin
-
-     FreeAndNil(fGlobalVulkanInstanceMatrixBuffers[aInFlightFrameIndex]);
-
-     case fBufferStreamingMode of
-
-      TBufferStreamingMode.Direct:begin
-       fGlobalVulkanInstanceMatrixBuffers[aInFlightFrameIndex]:=TpvVulkanBuffer.Create(fVulkanDevice,
-                                                                                       Size,
-                                                                                       TVkBufferUsageFlags(VK_BUFFER_USAGE_TRANSFER_DST_BIT) or TVkBufferUsageFlags(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT),
-                                                                                       TVkSharingMode(VK_SHARING_MODE_EXCLUSIVE),
-                                                                                       [],
-                                                                                       TVkMemoryPropertyFlags(VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT),
-                                                                                       TVkMemoryPropertyFlags(VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) or TVkMemoryPropertyFlags(VK_MEMORY_PROPERTY_HOST_COHERENT_BIT),
-                                                                                       0,
-                                                                                       0,
-                                                                                       0,
-                                                                                       0,
-                                                                                       0,
-                                                                                       0,
-                                                                                       [TpvVulkanBufferFlag.PersistentMapped,TpvVulkanBufferFlag.OwnSingleMemoryChunk,TpvVulkanBufferFlag.DedicatedAllocation],
-                                                                                       0,
-                                                                                       pvAllocationGroupIDScene3DDynamic,
-                                                                                       'TpvScene3D.fGlobalVulkanInstanceMatrixBuffers['+IntToStr(Index)+']');
-       fVulkanDevice.DebugUtils.SetObjectName(fGlobalVulkanInstanceMatrixBuffers[aInFlightFrameIndex].Handle,VK_OBJECT_TYPE_BUFFER,'TpvScene3D.fGlobalVulkanInstanceMatrixBuffers['+IntToStr(Index)+']');
-      end;
-
-      TBufferStreamingMode.Staging:begin
-       fGlobalVulkanInstanceMatrixBuffers[aInFlightFrameIndex]:=TpvVulkanBuffer.Create(fVulkanDevice,
-                                                                                       Size,
-                                                                                       TVkBufferUsageFlags(VK_BUFFER_USAGE_TRANSFER_DST_BIT) or TVkBufferUsageFlags(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT),
-                                                                                       TVkSharingMode(VK_SHARING_MODE_EXCLUSIVE),
-                                                                                       [],
-                                                                                       0,
-                                                                                       TVkMemoryPropertyFlags(VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT),
-                                                                                       0,
-                                                                                       TVkMemoryPropertyFlags(VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT),
-                                                                                       0,
-                                                                                       0,
-                                                                                       0,
-                                                                                       0,
-                                                                                       [TpvVulkanBufferFlag.OwnSingleMemoryChunk,TpvVulkanBufferFlag.DedicatedAllocation],
-                                                                                       0,
-                                                                                       pvAllocationGroupIDScene3DDynamic,
-                                                                                       'TpvScene3D.fGlobalVulkanInstanceMatrixBuffers['+IntToStr(Index)+']');
-       fVulkanDevice.DebugUtils.SetObjectName(fGlobalVulkanInstanceMatrixBuffers[aInFlightFrameIndex].Handle,VK_OBJECT_TYPE_BUFFER,'TpvScene3D.fGlobalVulkanInstanceMatrixBuffers['+IntToStr(Index)+']');
-      end;
-
-      else begin
-       Assert(false);
-      end;
-
-     end;
-
-     // InstanceMatrix binding 0 - REPLACED by DrawInfo at binding 0
-     //fGlobalVulkanDescriptorSets[aInFlightFrameIndex].WriteToDescriptorSet(0,
-     //                                                                      0,
-     //                                                                      1,
-     //                                                                      TVkDescriptorType(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER),
-     //                                                                      [],
-     //                                                                      [fGlobalVulkanInstanceMatrixBuffers[aInFlightFrameIndex].DescriptorBufferInfo],
-     //                                                                      [],
-     //                                                                      true);
-
-    end;
-
-    case fBufferStreamingMode of
-
-     TBufferStreamingMode.Direct:begin
-      fGlobalVulkanInstanceMatrixBuffers[aInFlightFrameIndex].UpdateData(fGlobalVulkanInstanceMatrixDynamicArrays[aInFlightFrameIndex].Items[0],
-                                                                         0,
-                                                                         fGlobalVulkanInstanceMatrixDynamicArrays[aInFlightFrameIndex].Count*SizeOf(TpvMatrix4x4),
-                                                                         FlushUpdateData
-                                                                        );
-     end;
-
-     TBufferStreamingMode.Staging:begin
-      fVulkanDevice.MemoryStaging.Upload(fVulkanStagingQueue,
-                                         fVulkanStagingCommandBuffer,
-                                         fVulkanStagingFence,
-                                         fGlobalVulkanInstanceMatrixDynamicArrays[aInFlightFrameIndex].Items[0],
-                                         fGlobalVulkanInstanceMatrixBuffers[aInFlightFrameIndex],
-                                         0,
-                                         fGlobalVulkanInstanceMatrixDynamicArrays[aInFlightFrameIndex].Count*SizeOf(TpvMatrix4x4));
-     end;
-
-     else begin
-      Assert(false);
-     end;
-
-    end;
-
-   end;
-
-  end;
-  *)
 
   // DrawInfo SSBO: per-frame buffer for BDA vertex pulling
   if fGlobalVulkanDrawInfoDynamicArrays[aInFlightFrameIndex].Count>0 then begin
