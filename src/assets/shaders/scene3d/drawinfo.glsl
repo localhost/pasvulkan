@@ -129,11 +129,11 @@ vec3 unpackPosition(in PackedCachedVertex v) {
 
 vec4 unpackNormalSign(in PackedCachedVertex v) {
   mat3 tbn = decodeQTangentUI32(v.qtangent);
-  vec3 normal = tbn[2];
-  // decodeQTangentUI32 uses cross(T, N) * s for bitangent, but mesh.vert uses cross(N, T) * w.
-  // Since cross(N, T) = -cross(T, N), we need w = -s.
+  // For reflected TBN (bit29=0, s=+1), the encoder flips N before quaternion extraction,
+  // so the decoder returns -N. Correct it here, and derive the bitangent sign.
+  // bit29=1 => s=-1 => non-reflected (N correct), bit29=0 => s=+1 => reflected (N flipped)
   float s = ((v.qtangent & (1u << 29u)) != 0u) ? -1.0 : 1.0;
-  return vec4(normal, -s);
+  return vec4(tbn[2], 1.0) * (-s); // Return N with correct sign, and bitangent sign as w
 }
 
 vec3 unpackTangent(in PackedCachedVertex v) {
