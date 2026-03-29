@@ -28,11 +28,11 @@ struct PackedStaticVertex {
 
 // Buffer reference types for vertex pulling via BDA
 
-layout(buffer_reference, std430, buffer_reference_align = 4) readonly buffer CachedVertexBuffer {
+layout(buffer_reference, std430, buffer_reference_align = 32) readonly buffer CachedVertexBuffer {
   PackedCachedVertex vertices[];
 };
 
-layout(buffer_reference, std430, buffer_reference_align = 4) readonly buffer StaticVertexBuffer {
+layout(buffer_reference, std430, buffer_reference_align = 32) readonly buffer StaticVertexBuffer {
   PackedStaticVertex vertices[];
 };
 
