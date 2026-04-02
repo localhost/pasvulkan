@@ -185,8 +185,11 @@ compileshaderarguments=(
   "-V mesh.comp -o ${tempPath}/mesh_comp.spv"
   "-V mesh.comp -DRAYTRACING -o ${tempPath}/mesh_raytracing_comp.spv"
 
+  "-V mesh_bounds.comp -o ${tempPath}/mesh_bounds_comp.spv"
+
   "-V mesh_cull.comp --target-env vulkan1.2 -DPASS=0 -o ${tempPath}/mesh_cull_pass0_comp.spv"
   "-V mesh_cull.comp --target-env vulkan1.2 -DPASS=1 -o ${tempPath}/mesh_cull_pass1_comp.spv"
+  "-V mesh_cull_reset.comp --target-env vulkan1.2 -o ${tempPath}/mesh_cull_reset_comp.spv"
 
   "-V mesh.vert --target-env vulkan1.2 -o ${tempPath}/mesh_vert.spv"
   "-V mesh.vert --target-env vulkan1.2 -DVELOCITY -o ${tempPath}/mesh_velocity_vert.spv"

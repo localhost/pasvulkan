@@ -65,8 +65,6 @@ unit PasVulkan.Scene3D;
 
 {$define InstanceUpdateDirtySkip}
 
-{$define DeferredAABBTreeUpdates}
-
 {$undef DeferredLightAABBTreeUpdates}
 
 {$define UpdateProfilingTimes}
@@ -460,6 +458,12 @@ type EpvScene3D=class(Exception);
              CountIndices:UInt32;
             end;
             PMeshComputeStagePushConstants=^TMeshComputeStagePushConstants;
+            TMeshBoundsComputePushConstants=record
+             IndexOffset:UInt32;
+             CountIndices:UInt32;
+             BoundingSphereIndex:UInt32;
+            end;
+            PMeshBoundsComputePushConstants=^TMeshBoundsComputePushConstants;
             TMeshStagePushConstants=record
 
              ViewBaseIndex:UInt32;
@@ -861,145 +865,6 @@ type EpvScene3D=class(Exception);
               property Triangles:TTriangles read fTriangles;
             end;
             TBakedMeshes=TpvObjectGenericList<TpvScene3D.TBakedMesh>;
-            { TPotentiallyVisibleSet }
-            TPotentiallyVisibleSet=class
-             public
-              type TFileSignature=array[0..3] of AnsiChar;
-                   TFileHeader=packed record
-                    Signature:TFileSignature;
-                    Version:TpvUInt32;
-                    BitmapOneDimensionSize:TpvUInt32;
-                    BitmapSize:TpvUInt32;
-                    BitmapDataSize:TpvUInt32;
-                    CountNodes:TpvUInt32;
-                   end;
-                   PFileHeader=^TFileHeader;
-                   TFileNode=packed record
-                    AABB:TpvAABB;
-                    Left:TpvInt32;
-                    Right:TpvInt32;
-                    SkipCount:TpvInt32;
-                   end;
-                   PFileNode=^TFileNode;
-                   TFileNodes=array of TFileNode;
-              const FileSignature:TpvScene3D.TPotentiallyVisibleSet.TFileSignature='PVS'#0;
-                    FileVersion:TpvUInt32=TpvUInt32($00000001);
-                    NoNodeIndex=TpvUInt32($ffffffff);
-                    CountRayCheckTapPoints=17;
-                    RayCheckTapPoints:array[0..CountRayCheckTapPoints-1] of TpvVector3=
-                     (
-
-                      (x:0.5;y:0.5;z:0.5),
-
-                      (x:0.015625;y:0.015625;z:0.015625),
-                      (x:0.984375;y:0.015625;z:0.015625),
-                      (x:0.015625;y:0.984375;z:0.015625),
-                      (x:0.984375;y:0.984375;z:0.015625),
-                      (x:0.015625;y:0.015625;z:0.984375),
-                      (x:0.984375;y:0.015625;z:0.984375),
-                      (x:0.015625;y:0.984375;z:0.984375),
-                      (x:0.984375;y:0.984375;z:0.984375),
-
-                      (x:0.25;y:0.25;z:0.25),
-                      (x:0.75;y:0.25;z:0.25),
-                      (x:0.25;y:0.75;z:0.25),
-                      (x:0.75;y:0.75;z:0.25),
-                      (x:0.25;y:0.25;z:0.75),
-                      (x:0.75;y:0.25;z:0.75),
-                      (x:0.25;y:0.75;z:0.75),
-                      (x:0.75;y:0.75;z:0.75)
-
-                     );
-              type TNodeIndexPair=TpvUInt64; // Hi 32-bit second pair index + Lo 32-bit first pair index
-                   PNodeIndexPair=^TNodeIndexPair;
-                   TNodeIndexPairList=class(TpvDynamicArrayList<TNodeIndexPair>);
-                   TNodeIndex=TpvUInt32;
-                   PNodeIndex=^TNodeIndex;
-                   TNodeIndexList=class(TpvDynamicArrayList<TNodeIndex>);
-                   TBitmap=array of TpvUInt32;
-                   TSubdivisonMode=
-                    (
-                     MeshBVH,
-                     UniformGrid,
-                     ManualZones
-                    );
-                   { TNode }
-                   TNode=class//(TpvPooledObject)
-                    private
-                     fOwner:TPotentiallyVisibleSet;
-                     fParent:TNode;
-                     fLevel:TpvUInt32;
-                     fAABB:TpvAABB;
-                     fLeft:TpvScene3D.TPotentiallyVisibleSet.TNode;
-                     fRight:TpvScene3D.TPotentiallyVisibleSet.TNode;
-                     fIndex:TpvUInt32;
-                     fSkipCount:TpvUInt32;
-                     //fTag:TpvPtrInt;
-                     fVisibleNodeList:TpvScene3D.TPotentiallyVisibleSet.TNodeIndexList;
-                     fMultipleReaderSingleWriterLockState:TPasMPInt32;
-                    public
-                     constructor Create(const aOwner:TPotentiallyVisibleSet;const aParent:TpvScene3D.TPotentiallyVisibleSet.TNode); reintroduce;
-                     destructor Destroy; override;
-                     procedure AddVisibleNodeIndex(const aNodeIndex:TpvScene3D.TPotentiallyVisibleSet.TNodeIndex);
-                    published
-                     property Owner:TPotentiallyVisibleSet read fOwner;
-                     property Parent:TNode read fParent;
-                     property Level:TpvUInt32 read fLevel;
-                     property Left:TNode read fLeft;
-                     property Right:TNode read fRight;
-                     property VisibleNodeList:TpvScene3D.TPotentiallyVisibleSet.TNodeIndexList read fVisibleNodeList;
-                    public
-                     property AABB:TpvAABB read fAABB;
-                    published
-                     property Index:TpvUInt32 read fIndex;
-                     property SkipCount:TpvUInt32 read fSkipCount;
-                   end;
-                   { TNodes }
-                   TNodes=class(TpvObjectGenericList<TpvScene3D.TPotentiallyVisibleSet.TNode>)
-                    public
-                     procedure SortByIndex;
-                   end;
-                   TViewNodeIndices=array[0..MaxViews-1] of TpvScene3D.TPotentiallyVisibleSet.TNodeIndex;
-                   TManualBoundingBoxes=class(TpvDynamicArrayList<TpvAABB>);
-             private
-              fSubdivisonMode:TpvScene3D.TPotentiallyVisibleSet.TSubdivisonMode;
-              fSubdivisonOneDimensionSize:TpvSizeInt;
-              fBakedMesh:TpvScene3D.TBakedMesh;
-              fTriangleBVH:TpvTriangleBVH;
-              fAABB:TpvAABB;
-              fRoot:TpvScene3D.TPotentiallyVisibleSet.TNode;
-              fNodes:TpvScene3D.TPotentiallyVisibleSet.TNodes;
-              fManualBoundingBoxes:TpvScene3D.TPotentiallyVisibleSet.TManualBoundingBoxes;
-              fBitmapOneDimensionSize:TpvUInt32;
-              fBitmapSize:TpvUInt32;
-              fBitmap:TBitmap;
-              fPasMPInstance:TPasMP;
-//            fViewNodeIndices:TViewNodeIndices;
-              function GetNodeVisibility(const aNodeAIndex,aNodeBIndex:TpvScene3D.TPotentiallyVisibleSet.TNodeIndex):boolean;
-              procedure SetNodeVisibility(const aNodeAIndex,aNodeBIndex:TpvScene3D.TPotentiallyVisibleSet.TNodeIndex;const aVisibility:boolean);
-              function RayCastTriangle(const aUserData:TpvPtrInt;const aRayOrigin,aRayDirection:TpvVector3;out aTime:TpvFloat;out aStop:boolean):boolean;
-              procedure NodePairVisibilityCheckRayParallelForJob(const aJob:PPasMPJob;const aThreadIndex:TPasMPInt32;const aData:pointer;const aFromIndex,aToIndex:TPasMPNativeInt);
-              procedure NodePairVisibilityCheckParallelForJob(const aJob:PPasMPJob;const aThreadIndex:TPasMPInt32;const aData:pointer;const aFromIndex,aToIndex:TPasMPNativeInt);
-             public
-              constructor Create; reintroduce;
-              destructor Destroy; override;
-              procedure Load(const aStream:TStream);
-              procedure Save(const aStream:TStream);
-              procedure Build(const aBakedMesh:TpvScene3D.TBakedMesh;const aMaxDepth:TpvInt32=8;const aPasMPInstance:TPasMP=nil);
-              function GetNodeIndexByPosition(const aPosition:TpvVector3):TpvScene3D.TPotentiallyVisibleSet.TNodeIndex;
-              function GetNodeIndexByAABB(const aAABB:TpvAABB):TpvScene3D.TPotentiallyVisibleSet.TNodeIndex;
-             published
-              property SubdivisonMode:TpvScene3D.TPotentiallyVisibleSet.TSubdivisonMode read fSubdivisonMode write fSubdivisonMode;
-              property SubdivisonOneDimensionSize:TpvSizeInt read fSubdivisonOneDimensionSize write fSubdivisonOneDimensionSize;
-              property ManualBoundingBoxes:TpvScene3D.TPotentiallyVisibleSet.TManualBoundingBoxes read fManualBoundingBoxes;
-             public
-              property AABB:TpvAABB read fAABB;
-             public
-              property Nodes:TpvScene3D.TPotentiallyVisibleSet.TNodes read fNodes;
-              property NodeVisibility[const aNodeAIndex,aNodeBIndex:TpvScene3D.TPotentiallyVisibleSet.TNodeIndex]:boolean read GetNodeVisibility write SetNodeVisibility; default;
-             published
-              property Root:TpvScene3D.TPotentiallyVisibleSet.TNode read fRoot;
-            end;
             TGroup=class;
             TBaseGroupObject=class(TBaseObject)
              private
@@ -2082,6 +1947,19 @@ type EpvScene3D=class(Exception);
              CountCommands:TpvUInt32;
             end;
             PDrawChoreographyBatchRange=^TDrawChoreographyBatchRange;
+            TGPUBatchRange=packed record
+             BaseCommandIndex:TpvUInt32;
+             CountCommands:TpvUInt32;
+             DrawCallIndex:TpvUInt32;
+             BaseCommandIndexForDisocclusions:TpvUInt32;
+             DrawCallIndexForDisocclusions:TpvUInt32;
+             AlphaMode:TpvUInt32;
+             OITDrawCallIndex:TpvUInt32;
+             OITBaseCommandIndex:TpvUInt32;
+            end;
+            PGPUBatchRange=^TGPUBatchRange;
+            TGPUBatchRangeDynamicArray=TpvDynamicArray<TGPUBatchRange>;
+            PGPUBatchRangeDynamicArray=^TGPUBatchRangeDynamicArray;
             TDrawChoreographyBatchRangeDynamicArray=TpvDynamicArray<TDrawChoreographyBatchRange>;
             PDrawChoreographyBatchRangeDynamicArray=^TDrawChoreographyBatchRangeDynamicArray;
             TDrawChoreographyBatchRangeIndexDynamicArray=TpvDynamicArray<TpvSizeInt>;
@@ -2907,13 +2785,11 @@ type EpvScene3D=class(Exception);
                             fBoundingSpheres:TInstanceBoundingSpheres;
                             fBoundingSphereIndex:TpvUInt32;
                             fBoundingSphereID:TpvID;
-                            fPotentiallyVisibleSetNodeIndices:array[0..MaxInFlightFrames-1] of TpvScene3D.TPotentiallyVisibleSet.TNodeIndex;
                             fCacheVerticesGenerations:array[0..MaxInFlightFrames-1] of TpvUInt64;
                             fCacheVerticesGeneration:TpvUInt64;
                             fCacheVerticesDirtyCounter:TpvUInt32;
                             fCacheMatrixGenerations:array[0..MaxInFlightFrames-1] of TpvUInt64;
                             fCacheMatrixGeneration:TpvUInt64;
-                            fAABBTreeProxy:TpvSizeInt;
                             fParents:array[0..MaxInFlightFrames-1] of TpvSizeInt;
                             fCullVisibleIDs:array[0..MaxInFlightFrames-1] of TpvSizeInt;
                             fCullObjectID:TpvUInt32;
@@ -3287,7 +3163,6 @@ type EpvScene3D=class(Exception);
                             fWorkActives:TRenderInstanceActives;
                             fFirst:Boolean;
                             fIndex:TpvSizeInt;
-                            fPotentiallyVisibleSetNodeIndex:TpvScene3D.TPotentiallyVisibleSet.TNodeIndex;
                             fModelMatrix:TpvMatrix4x4D;
                             fPreviousModelMatrix:TpvMatrix4x4D;
                             fWorkModelMatrix:TpvMatrix4x4D;
@@ -3330,7 +3205,6 @@ type EpvScene3D=class(Exception);
                           end;
                           TRenderInstances=TpvObjectGenericList<TRenderInstance>;
                           TPerInFlightFrameRenderInstance=record
-                           PotentiallyVisibleSetNodeIndex:TpvScene3D.TPotentiallyVisibleSet.TNodeIndex;
                            BoundingBox:TpvAABB;
                            RenderInstance:TObject;
                            ModelMatrix:TpvMatrix4x4;
@@ -3365,23 +3239,6 @@ type EpvScene3D=class(Exception);
                             Count:TpvSizeInt;
                           end;
                           PAABBTreeSkipList=^TAABBTreeSkipList;
-{$ifdef DeferredAABBTreeUpdates}
-                          TDeferredAABBOperationType=
-                           (
-                            Create_,
-                            Move,
-                            Destroy_
-                           );
-                          TDeferredAABBOperation=record
-                           OperationType:TDeferredAABBOperationType;
-                           Tree:TpvBVHDynamicAABBTree; // nil = global fSceneInstance.fAABBTree, else instance-local fAABBTree
-                           Proxy:PpvSizeInt;
-                           AABB:TpvAABB;
-                           UserData:TpvPtrInt;
-                          end;
-                          PDeferredAABBOperation=^TDeferredAABBOperation;
-                          TDeferredAABBOperations=TpvDynamicQueue<TDeferredAABBOperation>;
-{$endif}
 {$ifdef DeferredLightAABBTreeUpdates}
                           TDeferredLightOperationType=
                            (
@@ -3500,20 +3357,12 @@ type EpvScene3D=class(Exception);
                     private
                      fActiveScenes:array[-1..MaxInFlightFrames-1] of TpvScene3D.TGroup.TScene;
                      fActives:array[-1..MaxInFlightFrames-1] of boolean;
-                     fPotentiallyVisibleSetNodeIndices:array[-1..MaxInFlightFrames-1] of TpvScene3D.TPotentiallyVisibleSet.TNodeIndex;
                      fCullVisibleBitmapLocks:array[-1..MaxInFlightFrames-1] of TPasMPInt32;
                      fCullVisibleBitmaps:TCullVisibleBitmaps;
                      fLastUpdateInFlightFrameIndex:TpvSizeInt;
-                     fAABBTreeProxy:TpvSizeInt;
-                     fAABBTree:TpvBVHDynamicAABBTree;
-{$ifdef DeferredAABBTreeUpdates}
-                     fDeferredAABBOperations:TDeferredAABBOperations;
-{$endif}
 {$ifdef DeferredLightAABBTreeUpdates}
                      fDeferredLightOperations:TDeferredLightOperations;
 {$endif}
-                     fAABBTreeStates:array[-1..MaxInFlightFrames-1] of TpvBVHDynamicAABBTree.TState;
-                     fAABBTreeSkipLists:array[-1..MaxInFlightFrames-1] of TAABBTreeSkipList;
                      fBufferRanges:TBufferRanges;
                      fPointerToBufferRanges:PBufferRanges;
                      fCacheVerticesNodeDirtyBitmap:TpvUInt32DynamicArray;
@@ -3535,21 +3384,17 @@ type EpvScene3D=class(Exception);
                      procedure SetModelMatrix(const aModelMatrix:TpvMatrix4x4D);
                      procedure PreparePerInFlightFrameRenderInstances(const aInFlightFrameIndex:TpvSizeInt;
                                                                       const aRenderPass:TpvScene3DRendererRenderPass;
-                                                                      const aViewNodeIndices:TpvScene3D.TPotentiallyVisibleSet.TViewNodeIndices;
                                                                       const aViewBaseIndex:TpvSizeInt;
                                                                       const aCountViews:TpvSizeInt;
                                                                       const aFrustums:TpvFrustumDynamicArray;
-                                                                      const aPotentiallyVisibleSetCulling:boolean;
                                                                       out aFirstInstance:TpvSizeInt;
                                                                       out aInstancesCount:TpvSizeInt);
                      procedure Prepare(const aInFlightFrameIndex:TpvSizeInt;
                                        const aRendererInstance:TObject;
                                        const aRenderPass:TpvScene3DRendererRenderPass;
-                                       const aViewNodeIndices:TpvScene3D.TPotentiallyVisibleSet.TViewNodeIndices;
                                        const aViewBaseIndex:TpvSizeInt;
                                        const aCountViews:TpvSizeInt;
                                        const aFrustums:TpvFrustumDynamicArray;
-                                       const aPotentiallyVisibleSetCulling:boolean;
                                        const aMaterialAlphaModes:TpvScene3D.TMaterial.TAlphaModes;
                                        const aFrustumCullMask:TpvUInt32;
                                        const aShadowPass:Boolean);
@@ -3559,9 +3404,6 @@ type EpvScene3D=class(Exception);
                                                                 const aRelative:Boolean;
                                                                 const aMaterialAlphaModes:TpvScene3D.TMaterial.TAlphaModes=[TpvScene3D.TMaterial.TAlphaMode.Opaque,TpvScene3D.TMaterial.TAlphaMode.Blend,TpvScene3D.TMaterial.TAlphaMode.Mask]);
                      procedure UpdateCachedVertices(const aInFlightFrameIndex:TpvSizeInt);
-{$ifdef DeferredAABBTreeUpdates}
-                     procedure AddDeferredAABBOperation(const aOperationType:TDeferredAABBOperationType;const aTree:TpvBVHDynamicAABBTree;const aProxy:PpvSizeInt;const aAABB:TpvAABB;const aUserData:TpvPtrInt);
-{$endif}
 {$ifdef DeferredLightAABBTreeUpdates}
                      procedure AddDeferredLightOperation(const aOperationType:TDeferredLightOperationType;const aLight:TpvScene3D.TLight);
 {$endif}
@@ -3607,8 +3449,6 @@ type EpvScene3D=class(Exception);
                      procedure ProcessBoundingSceneBoxNodesWithManualStack(const aInFlightFrameIndex:TpvSizeInt;const aScene:TpvScene3D.TGroup.TScene);
                      procedure ProcessBoundingSceneBoxNodes(const aInFlightFrameIndex:TpvSizeInt;const aScene:TpvScene3D.TGroup.TScene);
                      procedure ProcessMorphSkinNode(const aInFlightFrameIndex:TpvSizeInt;const aNode:TpvScene3D.TGroup.TNode;const aInstanceNode:TpvScene3D.TGroup.TInstance.TNode);
-                     procedure ProcessSkinNode(const aInFlightFrameIndex:TpvSizeInt;const aNode:TpvScene3D.TGroup.TNode;const aInstanceNode:TpvScene3D.TGroup.TInstance.TNode);
-                     procedure GenerateAABBTreeSkipList(const aInFlightFrameIndex:TpvSizeInt);
                      procedure UpdateRenderInstances(const aInFlightFrameIndex:TpvSizeInt;const aInstanceUpdateDirtySkipped:Boolean);
                      procedure UpdateBoundingVolumes(const aInFlightFrameIndex:TpvSizeInt;const aInstanceUpdateDirtySkipped:Boolean);
 {$ifdef SplitInstanceUpdate}
@@ -3619,14 +3459,9 @@ type EpvScene3D=class(Exception);
                      procedure UpdateNodes(const aInFlightFrameIndex:TpvSizeInt;const aScene:TpvScene3D.TGroup.TScene;const aInstanceUpdateDirtySkipped:Boolean);
                      procedure UpdateSkins(const aInFlightFrameIndex:TpvSizeInt;const aInstanceUpdateDirtySkipped:Boolean);
                      procedure UpdateNodeBounds(const aInFlightFrameIndex:TpvSizeInt;const aScene:TpvScene3D.TGroup.TScene;const aInstanceUpdateDirtySkipped:Boolean);
-                     procedure UpdateNodePVS(const aInFlightFrameIndex:TpvSizeInt;const aScene:TpvScene3D.TGroup.TScene;const aInstanceUpdateDirtySkipped:Boolean);
-                     procedure UpdateNodeAABBTree(const aInFlightFrameIndex:TpvSizeInt;const aScene:TpvScene3D.TGroup.TScene;const aInstanceUpdateDirtySkipped:Boolean);
                      procedure UpdateInstanceBounds(const aInFlightFrameIndex:TpvSizeInt;const aScene:TpvScene3D.TGroup.TScene;const aInstanceUpdateDirtySkipped:Boolean);
-                     procedure UpdateInstancePVS(const aInFlightFrameIndex:TpvSizeInt;const aScene:TpvScene3D.TGroup.TScene;const aInstanceUpdateDirtySkipped:Boolean);
-                     procedure UpdateGlobalAABBProxy(const aInFlightFrameIndex:TpvSizeInt;const aInstanceUpdateDirtySkipped:Boolean);
                      procedure UpdateInstanceNodes(const aInFlightFrameIndex:TpvSizeInt;const aInstanceUpdateDirtySkipped:Boolean);
                      procedure UpdateDeactivation(const aInFlightFrameIndex:TpvSizeInt;const aInstanceUpdateDirtySkipped:Boolean);
-                     procedure UpdateLocalAABBTreeState(const aInFlightFrameIndex:TpvSizeInt;const aInstanceUpdateDirtySkipped:Boolean);
 {$ifdef InstanceUpdateDirtySkip}
                      procedure UpdateDirtySkipFastPath(const aInFlightFrameIndex:TpvSizeInt;const aScene:TpvScene3D.TGroup.TScene;const aInstanceUpdateDirtySkipped:Boolean);
 {$endif}
@@ -4048,6 +3883,13 @@ type EpvScene3D=class(Exception);
             end;
             PCachedVertexRange=^TCachedVertexRange;
             TCachedVertexRanges=TpvDynamicArray<TCachedVertexRange>;
+            TCachedBoundsRange=record
+             Offset:TpvSizeInt;
+             Count:TpvSizeInt;
+             BoundingSphereIndex:TpvUInt32;
+            end;
+            PCachedBoundsRange=^TCachedBoundsRange;
+            TCachedBoundsRanges=TpvDynamicArray<TCachedBoundsRange>;
             TSceneTimes=array[0..MaxInFlightFrames-1] of TpvDouble;
             PSceneTimes=^TSceneTimes;
             TInFlightFrameMaterialBufferDataGenerations=array[0..MaxInFlightFrames-1] of TMaterialGenerations;
@@ -4249,6 +4091,7 @@ type EpvScene3D=class(Exception);
        fVulkanDevice:TpvVulkanDevice;
        fVulkanPipelineCache:TpvVulkanPipelineCache;
        fMeshCompute:TObject;
+       fMeshBoundsCompute:TObject;
        fUploaded:TPasMPBool32;
        fInUpload:TPasMPBool32;
        fRendererInstanceIDManager:TRendererInstanceIDManager;
@@ -4256,7 +4099,6 @@ type EpvScene3D=class(Exception);
        fFreeQueue:TFreeQueue;
        fObjectListLock:TPasMPCriticalSection;
        fObjectList:TpvObjectList;
-       fPotentiallyVisibleSet:TpvScene3D.TPotentiallyVisibleSet;
        fBufferStreamingMode:TBufferStreamingMode;
        fMultiDrawSupport:Boolean;
        fMaxMultiDrawCount:TpvUInt32;
@@ -4418,9 +4260,6 @@ type EpvScene3D=class(Exception);
        fDecalNeedsCompaction:TPasMPBool32;
        fDecalDebugFlags:TpvScene3D.TDecalDebugFlags;
        fDecalTimeSteps:Boolean;
-       fAABBTree:TpvBVHDynamicAABBTree;
-       fAABBTreeLock:TPasMPSlimReaderWriterLock;
-       fAABBTreeStates:array[-1..MaxInFlightFrames-1] of TpvBVHDynamicAABBTree.TState;
        fBoundingBox:TpvAABB;
        fInFlightFrameBoundingBoxes:TInFlightFrameAABBs;
        fCountInFlightFrames:TpvSizeInt;
@@ -4495,6 +4334,7 @@ type EpvScene3D=class(Exception);
       public
        fVulkanNodeMatricesBufferData:array[0..MaxInFlightFrames-1] of TMatricesDynamicArray;
        fMeshComputeFrameDoneMask:TpvUInt32;
+       fMeshBoundsComputeFrameDoneMask:TpvUInt32;
       private
        fVulkanMorphTargetVertexWeightsBufferData:array[0..MaxInFlightFrames-1] of TFloatsDynamicArray;
        fVulkanVertexBufferRangeAllocator:TpvBufferRangeAllocator;
@@ -4553,6 +4393,7 @@ type EpvScene3D=class(Exception);
        fRendererInstanceList:TpvObjectList;
       private
        fCachedVertexRanges:TCachedVertexRanges;
+       fCachedBoundsRanges:TCachedBoundsRanges;
       private
        // TInstance.Update profiling accumulators (in milliseconds)
        fInstanceTimeResetSum:TpvDouble;
@@ -4563,9 +4404,7 @@ type EpvScene3D=class(Exception);
        fInstanceTimeMaterialSum:TpvDouble;
        fInstanceTimeProcessNodesSum:TpvDouble;
        fInstanceTimeSkinsSum:TpvDouble;
-       fInstanceTimeAABBTreeSum:TpvDouble;
        fInstanceTimeBoundingSum:TpvDouble;
-       fInstanceTimePotentiallyVisibleSetSum:TpvDouble;
        fInstanceTimeRenderInstanceSum:TpvDouble;
        fMeshGenerationCounter:TpvUInt32;
        fNewInstanceListLock:TPasMPSlimReaderWriterLock;
@@ -4579,6 +4418,7 @@ type EpvScene3D=class(Exception);
        fProcessFrameTimerQueryPlanetSimulationIndex:TpvSizeInt;
        fProcessFrameTimerQueryAtmosphereSimulationIndex:TpvSizeInt;
        fProcessFrameTimerQueryMeshComputeIndex:TpvSizeInt;
+       fProcessFrameTimerQueryMeshBoundsComputeIndex:TpvSizeInt;
        fProcessFrameTimerQueryUpdateRaytracingIndex:TpvSizeInt;
        fSceneTimes:TSceneTimes;
        fPointerToSceneTimes:PSceneTimes;
@@ -4595,6 +4435,8 @@ type EpvScene3D=class(Exception);
        fLoadGLTFTimeDurationLock:TPasMPInt32;
        fLoadGLTFTimeDuration:TpvDouble;
        fDrawDataGeneration:TPasMPUInt64;
+       fGPUInstanceDataGeneration:TpvUInt64;
+       fInFlightFrameGPUInstanceDataGenerations:array[0..MaxInFlightFrames-1] of TpvUInt64;
        fUpdatedOriginTransform:TPasMPBool32;
        fLastOriginTransform:TOriginTransform;
        fRaytracingOriginTransform:TOriginTransform;
@@ -4620,19 +4462,6 @@ type EpvScene3D=class(Exception);
        procedure CompactDecals;
        procedure CollectDecals(var aDecalItemArray:TpvScene3D.TDecalItems;
                                var aDecalMetaInfoArray:TpvScene3D.TDecalMetaInfos);
-       procedure CullAndPrepareGroupInstances(const aInFlightFrameIndex:TpvSizeInt;
-                                              const aRendererInstance:TObject;
-                                              const aRenderPass:TpvScene3DRendererRenderPass;
-                                              const aViews:TpvScene3D.TViews;
-                                              const aViewNodeIndices:TpvScene3D.TPotentiallyVisibleSet.TViewNodeIndices;
-                                              const aViewBaseIndex:TpvSizeInt;
-                                              const aCountViews:TpvSizeInt;
-                                              const aMaterialAlphaModes:TpvScene3D.TMaterial.TAlphaModes;
-                                              const aPotentiallyVisibleSetCulling:boolean;
-                                              const aFrustums:TpvFrustumDynamicArray;
-                                              const aTreeNodes:TpvBVHDynamicAABBTree.TTreeNodes;
-                                              const aRoot:TpvSizeInt;
-                                              const aShadowPass:boolean);
        function GetLightUserDataIndex(const aUserData:TpvPtrInt):TpvUInt32;
        function GetDecalUserDataIndex(const aUserData:TpvPtrInt):TpvUInt32;
       public
@@ -4657,9 +4486,6 @@ type EpvScene3D=class(Exception);
        procedure ProcessDirectedAcyclicGraphInstanceLeafsToRootJob(const aJob:PPasMPJob;const aThreadIndex:TPasMPInt32);
        procedure ProcessDirectedAcyclicGraphInstanceParallelForJob(const aJob:PPasMPJob;const aThreadIndex:TPasMPInt32;const aData:pointer;const aFromIndex,aToIndex:TPasMPNativeInt);
        procedure ProcessDirectedAcyclicGraph(const aInFlightFrameIndex:TpvSizeInt);
-{$ifdef DeferredAABBTreeUpdates}
-       procedure ProcessDeferredAABBOperations;
-{$endif}
 {$ifdef DeferredLightAABBTreeUpdates}
        procedure ProcessDeferredLightOperations;
 {$endif}
@@ -4705,7 +4531,6 @@ type EpvScene3D=class(Exception);
                          const aRendererInstance:TObject;
                          const aRenderPass:TpvScene3DRendererRenderPass;
                          const aViews:TpvScene3D.TViews;
-                         const aViewNodeIndices:TpvScene3D.TPotentiallyVisibleSet.TViewNodeIndices;
                          const aViewBaseIndex:TpvSizeInt;
                          const aCountViews:TpvSizeInt;
                          const aViewPortWidth:TpvInt32;
@@ -4713,11 +4538,13 @@ type EpvScene3D=class(Exception);
                          const aMainViewPort:Boolean;
                          const aMaterialAlphaModes:TpvScene3D.TMaterial.TAlphaModes=[TpvScene3D.TMaterial.TAlphaMode.Opaque,TpvScene3D.TMaterial.TAlphaMode.Blend,TpvScene3D.TMaterial.TAlphaMode.Mask];
                          const aFrustumCulling:boolean=true;
-                         const aPotentiallyVisibleSetCulling:boolean=true;
                          const aGPUCulling:boolean=true;
                          const aShadowPass:boolean=false);
        procedure UpdateCachedVertices(const aPipeline:TpvVulkanPipeline;
                                       const aInFlightFrameIndex:TpvSizeInt;
+                                      const aCommandBuffer:TpvVulkanCommandBuffer;
+                                      const aPipelineLayout:TpvVulkanPipelineLayout);
+       procedure DispatchCachedBounds(const aInFlightFrameIndex:TpvSizeInt;
                                       const aCommandBuffer:TpvVulkanCommandBuffer;
                                       const aPipelineLayout:TpvVulkanPipelineLayout);
        procedure UpdatePlanetBufRefArray(const aCommandBuffer:TpvVulkanCommandBuffer;
@@ -4767,7 +4594,8 @@ type EpvScene3D=class(Exception);
                       const aOnSetRenderPassResources:TpvScene3D.TOnSetRenderPassResources;
                       const aMaterialAlphaModes:TpvScene3D.TMaterial.TAlphaModes=[TpvScene3D.TMaterial.TAlphaMode.Opaque,TpvScene3D.TMaterial.TAlphaMode.Blend,TpvScene3D.TMaterial.TAlphaMode.Mask];
                       const aJitter:PpvVector4=nil;
-                      const aDisocclusions:Boolean=false);
+                      const aDisocclusions:Boolean=false;
+                      const aOITPromotion:Boolean=false);
        procedure GetZNearZFar(const aViewMatrix:TpvMatrix4x4D;
                               const aAspectRatio:TpvScalar;
                               out aZNear:TpvScalar;
@@ -4885,6 +4713,10 @@ type EpvScene3D=class(Exception);
       public
        property MeshCompute:TObject read fMeshCompute;
       public
+       property MeshBoundsCompute:TObject read fMeshBoundsCompute;
+      public
+       property CachedBoundsRanges:TCachedBoundsRanges read fCachedBoundsRanges;
+      public
        property VirtualReality:TpvVirtualReality read fVirtualReality;
       public
        property Planets:TObject read fPlanets;
@@ -4926,7 +4758,6 @@ type EpvScene3D=class(Exception);
        property VulkanFrameGraphStagingFence:TpvVulkanFence read fVulkanFrameGraphStagingFence;
       published
        property RendererInstanceIDManager:TRendererInstanceIDManager read fRendererInstanceIDManager;
-       property PotentiallyVisibleSet:TpvScene3D.TPotentiallyVisibleSet read fPotentiallyVisibleSet;
        property VulkanDevice:TpvVulkanDevice read fVulkanDevice;
        property VulkanPipelineCache:TpvVulkanPipelineCache read fVulkanPipelineCache;
        property GeneralComputeSampler:TpvVulkanSampler read fGeneralComputeSampler;
@@ -4993,6 +4824,7 @@ uses PasVulkan.PasMP,
      PasVulkan.Scene3D.Planet,
      PasVulkan.Scene3D.Atmosphere,
      PasVulkan.Scene3D.MeshCompute,
+     PasVulkan.Scene3D.MeshBoundsCompute,
      PasVulkan.Scene3D.Gizmo,
      PasVulkan.Scene3D.Tipsify,
      PasVulkan.Scene3D.Meshlets;
@@ -6079,6 +5911,7 @@ procedure TpvScene3D.TInstanceData.SetSelected(const aValue:TpvFloat);
 begin
  if GPUInstanceData^.Selected<>aValue then begin
   GPUInstanceData^.Selected:=aValue;
+  inc(fSceneInstance.fGPUInstanceDataGeneration);
  end;
 end;
 
@@ -6091,6 +5924,7 @@ procedure TpvScene3D.TInstanceData.SetDissolve(const aValue:TpvFloat);
 begin
  if GPUInstanceData^.Dissolve<>aValue then begin
   GPUInstanceData^.Dissolve:=aValue;
+  inc(fSceneInstance.fGPUInstanceDataGeneration);
  end;
 end;
 
@@ -6103,6 +5937,7 @@ procedure TpvScene3D.TInstanceData.SetDitheredTransparency(const aValue:TpvFloat
 begin
  if GPUInstanceData^.DitheredTransparency<>aValue then begin
   GPUInstanceData^.DitheredTransparency:=aValue;
+  inc(fSceneInstance.fGPUInstanceDataGeneration);
  end;
 end;
 
@@ -6115,6 +5950,7 @@ procedure TpvScene3D.TInstanceData.SetSelectedColorIntensity(const aValue:TpvVec
 begin
  if GPUInstanceData^.SelectedColorIntensity<>aValue then begin
   GPUInstanceData^.SelectedColorIntensity:=aValue;
+  inc(fSceneInstance.fGPUInstanceDataGeneration);
  end;
 end;
 
@@ -6127,6 +5963,7 @@ procedure TpvScene3D.TInstanceData.SetSelectedColor(const aValue:TpvVector3);
 begin
  if GPUInstanceData^.SelectedColorIntensity.xyz<>aValue then begin
   GPUInstanceData^.SelectedColorIntensity.xyz:=aValue;
+  inc(fSceneInstance.fGPUInstanceDataGeneration);
  end;
 end;
 
@@ -6139,6 +5976,7 @@ procedure TpvScene3D.TInstanceData.SetSelectedIntensity(const aValue:TpvFloat);
 begin
  if GPUInstanceData^.SelectedColorIntensity.w<>aValue then begin
   GPUInstanceData^.SelectedColorIntensity.w:=aValue;
+  inc(fSceneInstance.fGPUInstanceDataGeneration);
  end;
 end;
 
@@ -6151,6 +5989,7 @@ procedure TpvScene3D.TInstanceData.SetDissolveColor0Scale(const aValue:TpvVector
 begin
  if GPUInstanceData^.DissolveColor0Scale<>aValue then begin
   GPUInstanceData^.DissolveColor0Scale:=aValue;
+  inc(fSceneInstance.fGPUInstanceDataGeneration);
  end;
 end;
 
@@ -6163,6 +6002,7 @@ procedure TpvScene3D.TInstanceData.SetDissolveColor0(const aValue:TpvVector3);
 begin
  if GPUInstanceData^.DissolveColor0Scale.xyz<>aValue then begin
   GPUInstanceData^.DissolveColor0Scale.xyz:=aValue;
+  inc(fSceneInstance.fGPUInstanceDataGeneration);
  end;
 end;
 
@@ -6175,6 +6015,7 @@ procedure TpvScene3D.TInstanceData.SetDissolveScale(const aValue:TpvFloat);
 begin
  if GPUInstanceData^.DissolveColor0Scale.w<>aValue then begin
   GPUInstanceData^.DissolveColor0Scale.w:=aValue;
+  inc(fSceneInstance.fGPUInstanceDataGeneration);
  end;
 end;
 
@@ -6187,6 +6028,7 @@ procedure TpvScene3D.TInstanceData.SetDissolveColor1Width(const aValue:TpvVector
 begin
  if GPUInstanceData^.DissolveColor1Width<>aValue then begin
   GPUInstanceData^.DissolveColor1Width:=aValue;
+  inc(fSceneInstance.fGPUInstanceDataGeneration);
  end;
 end;
 
@@ -6199,6 +6041,7 @@ procedure TpvScene3D.TInstanceData.SetDissolveColor1(const aValue:TpvVector3);
 begin
  if GPUInstanceData^.DissolveColor1Width.xyz<>aValue then begin
   GPUInstanceData^.DissolveColor1Width.xyz:=aValue;
+  inc(fSceneInstance.fGPUInstanceDataGeneration);
  end;
 end;
 
@@ -6211,6 +6054,7 @@ procedure TpvScene3D.TInstanceData.SetDissolveWidth(const aValue:TpvFloat);
 begin
  if GPUInstanceData^.DissolveColor1Width.w<>aValue then begin
   GPUInstanceData^.DissolveColor1Width.w:=aValue;
+  inc(fSceneInstance.fGPUInstanceDataGeneration);
  end;
 end;
 
@@ -6227,6 +6071,7 @@ begin
   end else begin
    GPUInstanceData^.Flags:=GPUInstanceData^.Flags and not TpvUInt32(TpvUInt32(1) shl 0);
   end;
+  inc(fSceneInstance.fGPUInstanceDataGeneration);
  end;
 end;
 
@@ -6248,6 +6093,7 @@ begin
   GPUInstanceData^.ColorKeyR.y:=aValue.y;
   GPUInstanceData^.ColorKeyR.z:=aValue.z;
   GPUInstanceData^.ColorKeyR.w:=aValue.w;
+  inc(fSceneInstance.fGPUInstanceDataGeneration);
  end;
 end;
 
@@ -6269,6 +6115,7 @@ begin
   GPUInstanceData^.ColorKeyG.y:=aValue.y;
   GPUInstanceData^.ColorKeyG.z:=aValue.z;
   GPUInstanceData^.ColorKeyG.w:=aValue.w;
+  inc(fSceneInstance.fGPUInstanceDataGeneration);
  end;
 end;
 
@@ -6290,6 +6137,7 @@ begin
   GPUInstanceData^.ColorKeyB.y:=aValue.y;
   GPUInstanceData^.ColorKeyB.z:=aValue.z;
   GPUInstanceData^.ColorKeyB.w:=aValue.w;
+  inc(fSceneInstance.fGPUInstanceDataGeneration);
  end;
 end;
 
@@ -6311,6 +6159,7 @@ begin
   GPUInstanceData^.ColorKeyA.y:=aValue.y;
   GPUInstanceData^.ColorKeyA.z:=aValue.z;
   GPUInstanceData^.ColorKeyA.w:=aValue.w;
+  inc(fSceneInstance.fGPUInstanceDataGeneration);
  end;
 end;
 
@@ -6521,659 +6370,6 @@ end;
 procedure TpvScene3D.TBakedMesh.Combine(const aWith:TBakedMesh);
 begin
  fTriangles.Add(aWith.fTriangles);
-end;
-
-{ TpvScene3D.TPotentiallyVisibleSet.TNode }
-
-constructor TpvScene3D.TPotentiallyVisibleSet.TNode.Create(const aOwner:TPotentiallyVisibleSet;const aParent:TpvScene3D.TPotentiallyVisibleSet.TNode);
-begin
- inherited Create;
- fOwner:=aOwner;
- fOwner.fNodes.Add(self);
- fParent:=aParent;
- if assigned(fParent) then begin
-  fLevel:=fParent.fLevel+1;
- end else begin
-  fLevel:=0;
- end;
- fVisibleNodeList:=nil;
- fMultipleReaderSingleWriterLockState:=0;
-end;
-
-destructor TpvScene3D.TPotentiallyVisibleSet.TNode.Destroy;
-begin
- if assigned(fParent) then begin
-  if fParent.fLeft=self then begin
-   fParent.fLeft:=nil;
-  end else if fParent.fRight=self then begin
-   fParent.fRight:=nil;
-  end;
- end;
- if assigned(fLeft) then begin
-  fLeft.fParent:=nil;
- end;
- if assigned(fRight) then begin
-  fRight.fParent:=nil;
- end;
- FreeAndNil(fVisibleNodeList);
- inherited Destroy;
-end;
-
-procedure TpvScene3D.TPotentiallyVisibleSet.TNode.AddVisibleNodeIndex(const aNodeIndex:TpvScene3D.TPotentiallyVisibleSet.TNodeIndex);
-begin
- TPasMPMultipleReaderSingleWriterSpinLock.AcquireWrite(fMultipleReaderSingleWriterLockState);
- try
-  if not assigned(fVisibleNodeList) then begin
-   fVisibleNodeList:=TpvScene3D.TPotentiallyVisibleSet.TNodeIndexList.Create;
-  end;
-  fVisibleNodeList.Add(aNodeIndex);
- finally
-  TPasMPMultipleReaderSingleWriterSpinLock.ReleaseWrite(fMultipleReaderSingleWriterLockState);
- end;
-end;
-
-{ TpvScene3D.TPotentiallyVisibleSet.TNodes }
-
-function TpvScene3D_TPotentiallyVisibleSet_TNodes_SortByIndex_CompareFunc(const a,b:TpvPointer):TpvInt32;
-begin
- result:=Sign(TpvInt64(TpvScene3D.TPotentiallyVisibleSet.TNode(a).fIndex)-TpvInt64(TpvScene3D.TPotentiallyVisibleSet.TNode(b).fIndex));
-end;
-
-procedure TpvScene3D.TPotentiallyVisibleSet.TNodes.SortByIndex;
-begin
- if Count>1 then begin
-  IndirectIntroSort(PointerToItems,0,Count-1,TpvScene3D_TPotentiallyVisibleSet_TNodes_SortByIndex_CompareFunc);
- end;
-end;
-
-{ TpvScene3D.TPotentiallyVisibleSet }
-
-constructor TpvScene3D.TPotentiallyVisibleSet.Create;
-begin
- inherited Create;
-
- fRoot:=nil;
-
- fSubdivisonMode:=TpvScene3D.TPotentiallyVisibleSet.TSubdivisonMode.MeshBVH;
-
- fSubdivisonOneDimensionSize:=8;
-
- fManualBoundingBoxes:=TpvScene3D.TPotentiallyVisibleSet.TManualBoundingBoxes.Create;
-
- fBitmapOneDimensionSize:=0;
-
- fBitmapSize:=0;
-
- fBitmap:=nil;
-
- fNodes:=TpvScene3D.TPotentiallyVisibleSet.TNodes.Create;
- fNodes.OwnsObjects:=true;
-
-//FillChar(fViewNodeIndices,SizeOf(TViewNodeIndices),#$ff);
-
-end;
-
-destructor TpvScene3D.TPotentiallyVisibleSet.Destroy;
-begin
- FreeAndNil(fNodes);
- FreeAndNil(fManualBoundingBoxes);
- fRoot:=nil;
- fBitmap:=nil;
- inherited Destroy;
-end;
-
-procedure TpvScene3D.TPotentiallyVisibleSet.Load(const aStream:TStream);
-var NodeIndex,OtherNodeIndex:TpvSizeInt;
-    MemoryStream:TMemoryStream;
-    FileHeader:TpvScene3D.TPotentiallyVisibleSet.TFileHeader;
-    FileNode:TpvScene3D.TPotentiallyVisibleSet.TFileNode;
-    Node:TpvScene3D.TPotentiallyVisibleSet.TNode;
-begin
- fNodes.Clear;
- fRoot:=nil;
- fBitmapOneDimensionSize:=0;
- fBitmapSize:=0;
- fBitmap:=nil;
- MemoryStream:=TMemoryStream.Create;
- try
-
-  MemoryStream.CopyFrom(aStream,aStream.Size-aStream.Position);
-  MemoryStream.Seek(0,soBeginning);
-
-  MemoryStream.ReadBuffer(FileHeader,SizeOf(TpvScene3D.TPotentiallyVisibleSet.TFileHeader));
-  if (FileHeader.Signature=TpvScene3D.TPotentiallyVisibleSet.FileSignature) and
-     (FileHeader.Version=TpvScene3D.TPotentiallyVisibleSet.FileVersion) and
-     (FileHeader.CountNodes>0) then begin
-
-   fBitmapOneDimensionSize:=FileHeader.BitmapOneDimensionSize;
-
-   fBitmapSize:=FileHeader.BitmapSize;
-
-   SetLength(fBitmap,FileHeader.BitmapDataSize);
-
-   MemoryStream.ReadBuffer(fBitmap[0],length(fBitmap)*SizeOf(TpvUInt32));
-
-   for NodeIndex:=0 to FileHeader.CountNodes-1 do begin
-    TpvScene3D.TPotentiallyVisibleSet.TNode.Create(self,nil);
-   end;
-
-   for NodeIndex:=0 to FileHeader.CountNodes-1 do begin
-    MemoryStream.ReadBuffer(FileNode,SizeOf(TpvScene3D.TPotentiallyVisibleSet.TFileNode));
-    Node:=fNodes[NodeIndex];
-    Node.fAABB:=FileNode.AABB;
-    if FileNode.Left>=0 then begin
-     Node.fLeft:=fNodes[FileNode.Left];
-     Node.fLeft.fParent:=Node;
-    end;
-    if FileNode.Right>=0 then begin
-     Node.fRight:=fNodes[FileNode.Right];
-     Node.fRight.fParent:=Node;
-    end;
-    Node.fSkipCount:=FileNode.SkipCount;
-   end;
-
-   fAABB:=fNodes[0].fAABB;
-
-   for NodeIndex:=0 to FileHeader.CountNodes-1 do begin
-    for OtherNodeIndex:=NodeIndex+1 to FileHeader.CountNodes-1 do begin
-     if GetNodeVisibility(NodeIndex,OtherNodeIndex) then begin
-      fNodes[NodeIndex].AddVisibleNodeIndex(OtherNodeIndex);
-      fNodes[OtherNodeIndex].AddVisibleNodeIndex(NodeIndex);
-     end;
-    end;
-   end;
-
-  end;
-
- finally
-  FreeAndNil(MemoryStream);
- end;
-end;
-
-procedure TpvScene3D.TPotentiallyVisibleSet.Save(const aStream:TStream);
-var NodeIndex:TpvSizeInt;
-    MemoryStream:TMemoryStream;
-    FileHeader:TpvScene3D.TPotentiallyVisibleSet.TFileHeader;
-    FileNode:TpvScene3D.TPotentiallyVisibleSet.TFileNode;
-    Node:TpvScene3D.TPotentiallyVisibleSet.TNode;
-begin
- MemoryStream:=TMemoryStream.Create;
- try
-
-  FileHeader.Signature:=TpvScene3D.TPotentiallyVisibleSet.FileSignature;
-  FileHeader.Version:=TpvScene3D.TPotentiallyVisibleSet.FileVersion;
-  FileHeader.BitmapOneDimensionSize:=fBitmapOneDimensionSize;
-  FileHeader.BitmapSize:=fBitmapSize;
-  FileHeader.BitmapDataSize:=length(fBitmap);
-  FileHeader.CountNodes:=fNodes.Count;
-  MemoryStream.WriteBuffer(FileHeader,SizeOf(TpvScene3D.TPotentiallyVisibleSet.TFileHeader));
-
-  MemoryStream.WriteBuffer(fBitmap[0],length(fBitmap)*SizeOf(TpvUInt32));
-
-  for NodeIndex:=0 to fNodes.Count-1 do begin
-   Node:=fNodes[NodeIndex];
-   FileNode.AABB:=Node.AABB;
-   if assigned(Node.fLeft) then begin
-    FileNode.Left:=Node.fLeft.fIndex;
-   end else begin
-    FileNode.Left:=-1;
-   end;
-   if assigned(Node.fRight) then begin
-    FileNode.Right:=Node.fRight.fIndex;
-   end else begin
-    FileNode.Right:=-1;
-   end;
-   FileNode.SkipCount:=Node.fSkipCount;
-   MemoryStream.WriteBuffer(FileNode,SizeOf(TpvScene3D.TPotentiallyVisibleSet.TFileNode));
-  end;
-
-  MemoryStream.Seek(0,soBeginning);
-  aStream.CopyFrom(MemoryStream,MemoryStream.Size);
-
- finally
-  FreeAndNil(MemoryStream);
- end;
-end;
-
-function TpvScene3D.TPotentiallyVisibleSet.GetNodeVisibility(const aNodeAIndex,aNodeBIndex:TpvScene3D.TPotentiallyVisibleSet.TNodeIndex):boolean;
-var BitIndex:TpvUInt64;
-begin
- if (aNodeAIndex<fBitmapOneDimensionSize) and (aNodeBIndex<fBitmapOneDimensionSize) then begin
-  BitIndex:=(aNodeAIndex*fBitmapOneDimensionSize)+aNodeBIndex;
-  result:=(fBitmap[BitIndex shr 5] and (TpvUInt32(1) shl (BitIndex and 31)))<>0;
- end else begin
-  result:=true;
- end;
-end;
-
-procedure TpvScene3D.TPotentiallyVisibleSet.SetNodeVisibility(const aNodeAIndex,aNodeBIndex:TpvScene3D.TPotentiallyVisibleSet.TNodeIndex;const aVisibility:boolean);
-var BitIndex:TpvUInt64;
-begin
- if (aNodeAIndex<fBitmapOneDimensionSize) and (aNodeBIndex<fBitmapOneDimensionSize) then begin
-  BitIndex:=(aNodeAIndex*fBitmapOneDimensionSize)+aNodeBIndex;
-  if aVisibility then begin
-   TPasMPInterlocked.BitwiseOr(fBitmap[BitIndex shr 5],TpvUInt32(1) shl (BitIndex and 31));
-  end else begin
-   TPasMPInterlocked.BitwiseAnd(fBitmap[BitIndex shr 5],not TpvUInt32(TpvUInt32(1) shl (BitIndex and 31)));
-  end;
- end;
-end;
-
-function TpvScene3D.TPotentiallyVisibleSet.RayCastTriangle(const aUserData:TpvPtrInt;const aRayOrigin,aRayDirection:TpvVector3;out aTime:TpvFloat;out aStop:boolean):boolean;
-var u,v:TpvScalar;
-begin
- if (aUserData>0) and (aUserData<=fBakedMesh.fTriangles.Count) and (TpvUInt32(aUserData)<>High(TpvUInt32)) then begin
-  result:=fBakedMesh.fTriangles[aUserData-1].RayIntersection(aRayOrigin,aRayDirection,aTime,u,v);
- end else begin
-  result:=false;
- end;
-end;
-
-procedure TpvScene3D.TPotentiallyVisibleSet.NodePairVisibilityCheckRayParallelForJob(const aJob:PPasMPJob;const aThreadIndex:TPasMPInt32;const aData:pointer;const aFromIndex,aToIndex:TPasMPNativeInt);
-var Index,TapAIndex,TapBIndex:TPasMPNativeInt;
-    NodeIndexPair:TpvScene3D.TPotentiallyVisibleSet.TNodeIndexPair;
-    NodeAIndex,NodeBIndex:TpvScene3D.TPotentiallyVisibleSet.TNodeIndex;
-    NodeA,NodeB:TpvScene3D.TPotentiallyVisibleSet.TNode;
-    TapA,TapB,RayOrigin,RayDirection:TpvVector3;
-    Time,Len:TpvScalar;
-    Hit:boolean;
-    Intersection:TpvTriangleBVHIntersection;
-begin
-
- NodeIndexPair:=TpvScene3D.TPotentiallyVisibleSet.TNodeIndexPair(aData^);
-
- NodeAIndex:=TpvUInt32(NodeIndexPair and TpvUInt32($ffffffff));
- NodeBIndex:=TpvUInt32((NodeIndexPair shr 32) and TpvUInt32($ffffffff));
-
- if not (GetNodeVisibility(NodeAIndex,NodeBIndex) or GetNodeVisibility(NodeBIndex,NodeAIndex)) then begin
-
-  NodeA:=fNodes[NodeAIndex];
-  NodeB:=fNodes[NodeBIndex];
-
-  for Index:=aFromIndex to aToIndex do begin
-
-   TapAIndex:=Index div TpvScene3D.TPotentiallyVisibleSet.CountRayCheckTapPoints;
-   TapBIndex:=Index-(TapAIndex*TpvScene3D.TPotentiallyVisibleSet.CountRayCheckTapPoints);
-
-   TapA:=NodeA.fAABB.Min+((NodeA.fAABB.Max-NodeA.fAABB.Min)*TpvScene3D.TPotentiallyVisibleSet.RayCheckTapPoints[TapAIndex]);
-   TapB:=NodeB.fAABB.Min+((NodeB.fAABB.Max-NodeB.fAABB.Min)*TpvScene3D.TPotentiallyVisibleSet.RayCheckTapPoints[TapBIndex]);
-
-   Len:=(TapB-TapA).Length;
-
-   RayOrigin:=TapA;
-   RayDirection:=(TapB-TapA).Normalize;
-   if NodeB.fAABB.RayIntersection(RayOrigin,RayDirection,Time) and (Time>=0.0) then begin
-    if not fTriangleBVH.LineIntersection(TapA,RayOrigin+(RayDirection*Time)) then begin
-     SetNodeVisibility(NodeAIndex,NodeBIndex,true);
-     SetNodeVisibility(NodeBIndex,NodeAIndex,true);
-     break;
-    end;
-   end;
-
-   RayOrigin:=TapB;
-   RayDirection:=(TapA-TapB).Normalize;
-   if NodeA.fAABB.RayIntersection(RayOrigin,RayDirection,Time) and (Time>=0.0) then begin
-    if not fTriangleBVH.LineIntersection(TapB,RayOrigin+(RayDirection*Time)) then begin
-     SetNodeVisibility(NodeAIndex,NodeBIndex,true);
-     SetNodeVisibility(NodeBIndex,NodeAIndex,true);
-     break;
-    end;
-   end;
-
-   if (GetNodeVisibility(NodeAIndex,NodeBIndex) or GetNodeVisibility(NodeBIndex,NodeAIndex)) then begin
-    break;
-   end;
-
-  end;
-
- end;
-
-end;
-
-procedure TpvScene3D.TPotentiallyVisibleSet.NodePairVisibilityCheckParallelForJob(const aJob:PPasMPJob;const aThreadIndex:TPasMPInt32;const aData:pointer;const aFromIndex,aToIndex:TPasMPNativeInt);
-var Index:TPasMPNativeInt;
-    NodeAIndex,NodeBIndex:TpvScene3D.TPotentiallyVisibleSet.TNodeIndex;
-    NodeIndexPairList:TpvScene3D.TPotentiallyVisibleSet.TNodeIndexPairList;
-    NodeIndexPair:TpvScene3D.TPotentiallyVisibleSet.TNodeIndexPair;
-    NodeA,NodeB:TpvScene3D.TPotentiallyVisibleSet.TNode;
-    MutuallyVisible:boolean;
-begin
-
- NodeIndexPairList:=TpvScene3D.TPotentiallyVisibleSet.TNodeIndexPairList(aData);
-
- for Index:=aFromIndex to aToIndex do begin
-
-  NodeIndexPair:=NodeIndexPairList[Index];
-
-  NodeAIndex:=TpvUInt32(NodeIndexPair and TpvUInt32($ffffffff));
-  NodeBIndex:=TpvUInt32((NodeIndexPair shr 32) and TpvUInt32($ffffffff));
-
-  if not (GetNodeVisibility(NodeAIndex,NodeBIndex) or GetNodeVisibility(NodeBIndex,NodeAIndex)) then begin
-
-   NodeA:=fNodes[NodeAIndex];
-   NodeB:=fNodes[NodeBIndex];
-
-   MutuallyVisible:=NodeA.fAABB.Intersect(NodeB.fAABB);
-
-   if not MutuallyVisible then begin
-    fPasMPInstance.Invoke(fPasMPInstance.ParallelFor(@NodeIndexPair,0,TpvScene3D.TPotentiallyVisibleSet.CountRayCheckTapPoints*TpvScene3D.TPotentiallyVisibleSet.CountRayCheckTapPoints-1,NodePairVisibilityCheckRayParallelForJob,-4,PasMPDefaultDepth,nil,0,0,0,true));
-    MutuallyVisible:=GetNodeVisibility(NodeAIndex,NodeBIndex) or GetNodeVisibility(NodeBIndex,NodeAIndex);
-   end;
-
-   if MutuallyVisible then begin
-    SetNodeVisibility(NodeAIndex,NodeBIndex,true);
-    SetNodeVisibility(NodeBIndex,NodeAIndex,true);
-    NodeA.AddVisibleNodeIndex(NodeBIndex);
-    NodeB.AddVisibleNodeIndex(NodeAIndex);
-   end;
-
-  end;
-
- end;
-
-end;
-
-procedure TpvScene3D.TPotentiallyVisibleSet.Build(const aBakedMesh:TpvScene3D.TBakedMesh;const aMaxDepth:TpvInt32;const aPasMPInstance:TPasMP);
-type TStackItem=record
-      Node:TpvScene3D.TPotentiallyVisibleSet.TNode;
-      NodeIndex:TpvSizeInt;
-      MetaData:TpvInt32;
-     end;
-     PStackItem=^TStackItem;
-     TStack=TpvDynamicStack<TStackItem>;
-var TriangleIndex,NodeIndexCounter,Index,OtherIndex,x,y,z:TpvSizeInt;
-    BakedTriangle:TpvScene3D.TBakedMesh.PTriangle;
-    StackItem,NewStackItem:TStackItem;
-    Stack:TStack;
-    NodeIndexPairList:TpvScene3D.TPotentiallyVisibleSet.TNodeIndexPairList;
-    TemporaryAABB:TpvAABB;
-    DynamicAABBTree:TpvBVHDynamicAABBTree;
-begin
-
- fNodes.Clear;
-
- fRoot:=nil;
-
- if assigned(aBakedMesh) then begin
-
-  fBakedMesh:=aBakedMesh;
-  try
-
-   if assigned(aPasMPInstance) then begin
-    fPasMPInstance:=aPasMPInstance;
-   end else begin
-    fPasMPInstance:=TPasMP.GetGlobalInstance;
-   end;
-
-   fTriangleBVH:=TpvTriangleBVH.Create(fPasMPInstance);
-   try
-
-    for TriangleIndex:=0 to fBakedMesh.Triangles.Count-1 do begin
-     BakedTriangle:=@fBakedMesh.Triangles.ItemArray[TriangleIndex];
-     fTriangleBVH.AddTriangle(BakedTriangle^.Positions[0],
-                              BakedTriangle^.Positions[1],
-                              BakedTriangle^.Positions[2],
-                              nil,
-                              TriangleIndex,
-                              TpvUInt32($ffffffff));
-    end;
-
-    fTriangleBVH.Build;
-
-    if fTriangleBVH.CountSkipListNodes>0 then begin
-
-     fAABB.Min:=fTriangleBVH.SkipListNodes[0].Min.Vector3;
-     fAABB.Max:=fTriangleBVH.SkipListNodes[0].Max.Vector3;
-
-     case fSubdivisonMode of
-
-      TpvScene3D.TPotentiallyVisibleSet.TSubdivisonMode.UniformGrid,
-      TpvScene3D.TPotentiallyVisibleSet.TSubdivisonMode.ManualZones:begin
-
-       DynamicAABBTree:=TpvBVHDynamicAABBTree.Create;
-       try
-
-        case fSubdivisonMode of
-
-         TpvScene3D.TPotentiallyVisibleSet.TSubdivisonMode.UniformGrid:begin
-
-          Index:=0;
-
-          for z:=0 to fSubdivisonOneDimensionSize-1 do begin
-           TemporaryAABB.Min.z:=FloatLerp(fAABB.Min.z,fAABB.Max.z,z/fSubdivisonOneDimensionSize);
-           TemporaryAABB.Max.z:=FloatLerp(fAABB.Min.z,fAABB.Max.z,(z+1)/fSubdivisonOneDimensionSize);
-           for y:=0 to fSubdivisonOneDimensionSize-1 do begin
-            TemporaryAABB.Min.y:=FloatLerp(fAABB.Min.y,fAABB.Max.y,y/fSubdivisonOneDimensionSize);
-            TemporaryAABB.Max.y:=FloatLerp(fAABB.Min.y,fAABB.Max.y,(y+1)/fSubdivisonOneDimensionSize);
-            for x:=0 to fSubdivisonOneDimensionSize-1 do begin
-             TemporaryAABB.Min.x:=FloatLerp(fAABB.Min.x,fAABB.Max.x,z/fSubdivisonOneDimensionSize);
-             TemporaryAABB.Max.x:=FloatLerp(fAABB.Min.x,fAABB.Max.x,(z+1)/fSubdivisonOneDimensionSize);
-             DynamicAABBTree.CreateProxy(TemporaryAABB,Index+1);
-             inc(Index);
-            end;
-           end;
-          end;
-
-          DynamicAABBTree.Rebuild;
-
-         end;
-
-         TpvScene3D.TPotentiallyVisibleSet.TSubdivisonMode.ManualZones:begin
-
-          for Index:=0 to fManualBoundingBoxes.Count-1 do begin
-           DynamicAABBTree.CreateProxy(fManualBoundingBoxes.Items[Index],Index+1);
-          end;
-
-          DynamicAABBTree.Rebuild(true,true);
-
-         end;
-
-         else begin
-
-         end;
-
-        end;
-
-        Stack.Initialize;
-        try
-         NewStackItem.Node:=nil;
-         NewStackItem.NodeIndex:=DynamicAABBTree.Root;
-         NewStackItem.MetaData:=0;
-         Stack.Push(NewStackItem);
-         while Stack.Pop(StackItem) do begin
-          if (not assigned(StackItem.Node)) or
-             (fSubdivisonMode<>TpvScene3D.TPotentiallyVisibleSet.TSubdivisonMode.MeshBVH) or
-             (StackItem.Node.fLevel<aMaxDepth) then begin
-           NewStackItem.Node:=TpvScene3D.TPotentiallyVisibleSet.TNode.Create(self,StackItem.Node);
-           //NewStackItem.Node.fTag:=DynamicAABBTree.Nodes[StackItem.NodeIndex].UserData-1;
-           if not assigned(fRoot) then begin
-            fRoot:=NewStackItem.Node;
-           end;
-           if assigned(StackItem.Node) then begin
-            if StackItem.MetaData>0 then begin
-             StackItem.Node.fRight:=NewStackItem.Node;
-            end else begin
-             StackItem.Node.fLeft:=NewStackItem.Node;
-            end;
-           end;
-           NewStackItem.Node.fAABB:=DynamicAABBTree.Nodes[StackItem.NodeIndex].AABB;
-           if DynamicAABBTree.Nodes[StackItem.NodeIndex].Children[1]>=0 then begin
-            NewStackItem.NodeIndex:=DynamicAABBTree.Nodes[StackItem.NodeIndex].Children[1];
-            NewStackItem.MetaData:=1;
-            Stack.Push(NewStackItem);
-           end;
-           if DynamicAABBTree.Nodes[StackItem.NodeIndex].Children[0]>=0 then begin
-            NewStackItem.NodeIndex:=DynamicAABBTree.Nodes[StackItem.NodeIndex].Children[0];
-            NewStackItem.MetaData:=0;
-            Stack.Push(NewStackItem);
-           end;
-          end;
-         end;
-        finally
-         Stack.Finalize;
-        end;
-
-       finally
-        FreeAndNil(DynamicAABBTree);
-       end;
-
-      end;
-
-      else {TpvScene3D.TPotentiallyVisibleSet.TSubdivisonMode.MeshBVH:}begin
-
-       Stack.Initialize;
-       try
-        NewStackItem.Node:=nil;
-        NewStackItem.NodeIndex:=fTriangleBVH.TreeNodeRoot;
-        NewStackItem.MetaData:=0;
-        Stack.Push(NewStackItem);
-        while Stack.Pop(StackItem) do begin
-         if (not assigned(StackItem.Node)) or (StackItem.Node.fLevel<aMaxDepth) then begin
-          NewStackItem.Node:=TpvScene3D.TPotentiallyVisibleSet.TNode.Create(self,StackItem.Node);
-          //NewStackItem.Node.fTag:=0;//fTriangleDynamicAABBTree.Nodes[StackItem.NodeIndex].UserData-1;
-          if not assigned(fRoot) then begin
-           fRoot:=NewStackItem.Node;
-          end;
-          if assigned(StackItem.Node) then begin
-           if StackItem.MetaData>0 then begin
-            StackItem.Node.fRight:=NewStackItem.Node;
-           end else begin
-            StackItem.Node.fLeft:=NewStackItem.Node;
-           end;
-          end;
-          NewStackItem.Node.fAABB:=fTriangleBVH.TreeNodes[StackItem.NodeIndex].Bounds;
-          if fTriangleBVH.TreeNodes[StackItem.NodeIndex].FirstLeftChild>=0 then begin
-           NewStackItem.NodeIndex:=fTriangleBVH.TreeNodes[StackItem.NodeIndex].FirstLeftChild+1;
-           NewStackItem.MetaData:=1;
-           Stack.Push(NewStackItem);
-           NewStackItem.NodeIndex:=fTriangleBVH.TreeNodes[StackItem.NodeIndex].FirstLeftChild+0;
-           NewStackItem.MetaData:=0;
-           Stack.Push(NewStackItem);
-          end;
-         end;
-        end;
-       finally
-        Stack.Finalize;
-       end;
-
-      end;
-     end;
-
-     Stack.Initialize;
-     try
-      NodeIndexCounter:=0;
-      NewStackItem.Node:=fRoot;
-      NewStackItem.MetaData:=0;
-      Stack.Push(NewStackItem);
-      while Stack.Pop(StackItem) do begin
-       case StackItem.MetaData of
-        0:begin
-         StackItem.Node.fIndex:=NodeIndexCounter;
-         StackItem.Node.fSkipCount:=0;
-         inc(NodeIndexCounter);
-         NewStackItem.Node:=StackItem.Node;
-         NewStackItem.MetaData:=1;
-         Stack.Push(NewStackItem);
-         if assigned(StackItem.Node.fRight) then begin
-          NewStackItem.Node:=StackItem.Node.fRight;
-          NewStackItem.MetaData:=0;
-          Stack.Push(NewStackItem);
-         end;
-         if assigned(StackItem.Node.fLeft) then begin
-          NewStackItem.Node:=StackItem.Node.fLeft;
-          NewStackItem.MetaData:=0;
-          Stack.Push(NewStackItem);
-         end;
-        end;
-        1:begin
-         StackItem.Node.fSkipCount:=NodeIndexCounter-StackItem.Node.fIndex;
-        end;
-       end;
-      end;
-     finally
-      Stack.Finalize;
-     end;
-
-     fNodes.SortByIndex;
-
-     fBitmapOneDimensionSize:=fNodes.Count;
-     fBitmapSize:=fBitmapOneDimensionSize*fBitmapOneDimensionSize;
-     SetLength(fBitmap,(fBitmapSize+31) shr 5);
-     if length(fBitmap)>0 then begin
-      FillChar(fBitmap[0],length(fBitmap)*SizeOf(TpVUInt32),#0);
-     end;
-
-     NodeIndexPairList:=TpvScene3D.TPotentiallyVisibleSet.TNodeIndexPairList.Create;
-     try
-      //Count:=((fNodes.Count*fNodes.Count) shr 1)-(fNodes.Count shr 1);
-      for Index:=0 to fNodes.Count-1 do begin
-       for OtherIndex:=Index+1 to fNodes.Count-1 do begin
-        NodeIndexPairList.Add((TpvUInt64(OtherIndex) shl 32) or TpvUInt64(Index));
-       end;
-      end;
-      if NodeIndexPairList.Count>0 then begin
-       fPasMPInstance.Invoke(fPasMPInstance.ParallelFor(NodeIndexPairList,0,NodeIndexPairList.Count-1,NodePairVisibilityCheckParallelForJob,-4,PasMPDefaultDepth,nil,0,0,0));
-      end;
-     finally
-      FreeAndNil(NodeIndexPairList);
-     end;
-
-    end;
-
-   finally
-    FreeAndNil(fTriangleBVH);
-   end;
-
-  finally
-   fBakedMesh:=nil;
-  end;
-
- end;
-
-end;
-
-function TpvScene3D.TPotentiallyVisibleSet.GetNodeIndexByPosition(const aPosition:TpvVector3):TpvScene3D.TPotentiallyVisibleSet.TNodeIndex;
-var Index,Count:TpvUInt32;
-    Node:TpvScene3D.TPotentiallyVisibleSet.TNode;
-begin
- result:=TpvScene3D.TPotentiallyVisibleSet.NoNodeIndex;
- Index:=0;
- Count:=fNodes.Count;
- while Index<Count do begin
-  Node:=fNodes[Index];
-  if Node.fAABB.Contains(aPosition) then begin
-   result:=Index;
-   inc(Index);
-  end else begin
-   if Node.fSkipCount>0 then begin
-    inc(Index,Node.fSkipCount);
-   end else begin
-    break;
-   end;
-  end;
- end;
-end;
-
-function TpvScene3D.TPotentiallyVisibleSet.GetNodeIndexByAABB(const aAABB:TpvAABB):TpvScene3D.TPotentiallyVisibleSet.TNodeIndex;
-var Index,Count:TpvUInt32;
-    Node:TpvScene3D.TPotentiallyVisibleSet.TNode;
-begin
- result:=TpvScene3D.TPotentiallyVisibleSet.NoNodeIndex;
- Index:=0;
- Count:=fNodes.Count;
- while Index<Count do begin
-  Node:=fNodes[Index];
-  if Node.fAABB.Contains(aAABB) then begin
-   result:=Index;
-   inc(Index);
-  end else begin
-   if Node.fSkipCount>0 then begin
-    inc(Index,Node.fSkipCount);
-   end else begin
-    break;
-   end;
-  end;
- end;
 end;
 
 { TpvScene3D.TUpdateCulling }
@@ -25739,8 +24935,6 @@ begin
 
  fIndex:=-1;
 
- fPotentiallyVisibleSetNodeIndex:=TpvScene3D.TPotentiallyVisibleSet.NoNodeIndex;
-
  fModelMatrix:=TpvMatrix4x4.Identity;
 
  fPreviousModelMatrix:=TpvMatrix4x4.Identity;
@@ -25914,6 +25108,7 @@ procedure TpvScene3D.TGroup.TInstance.TRenderInstance.SetActive(const aActive:bo
 begin
  if fActive<>aActive then begin
   fActive:=aActive;
+  TPasMPInterlocked.Increment(fSceneInstance.fDrawDataGeneration);
   fSceneInstance.InvalidateDirectedAcyclicGraph;
  end;
 end;
@@ -26436,7 +25631,6 @@ begin
     SetLength(InstanceNode.fOverwrites[OtherIndex].Weights,Node.fWeights.Count);
    end;
    for OtherIndex:=0 to fSceneInstance.fCountInFlightFrames-1 do begin
-    InstanceNode.fPotentiallyVisibleSetNodeIndices[OtherIndex]:=TpvScene3D.TPotentiallyVisibleSet.NoNodeIndex;
     InstanceNode.fCacheVerticesGenerations[OtherIndex]:=0;
     InstanceNode.fCacheMatrixGenerations[OtherIndex]:=0;
     InstanceNode.fInFlightFrameVisible[OtherIndex]:=not Node.fIsLODVariant;
@@ -26446,7 +25640,6 @@ begin
    InstanceNode.fCacheVerticesGeneration:=1;
    InstanceNode.fCacheVerticesDirtyCounter:=1;
    InstanceNode.fCacheMatrixGeneration:=1;
-   InstanceNode.fAABBTreeProxy:=-1;
    InstanceNode.fRaytracingGroupInstanceNodeID:=0;
    InstanceNode.fRaytracingMask:=$ff;
    InstanceNode.fCastingShadows:=true;
@@ -26526,7 +25719,6 @@ begin
  SetLength(fMorphTargetVertexWeights,Max(Max(fGroup.fMorphTargetCount,fGroup.fCountNodeWeights),1));
 
  for Index:=0 to fSceneInstance.fCountInFlightFrames-1 do begin
-  fPotentiallyVisibleSetNodeIndices[Index]:=TpvScene3D.TPotentiallyVisibleSet.NoNodeIndex;
  end;
 
  for Index:=0 to fSceneInstance.fCountInFlightFrames-1 do begin
@@ -26538,8 +25730,6 @@ begin
  end;
 
  fBoundingRadius:=-1.0;
-
- fAABBTreeProxy:=-1;
 
  SetLength(fCacheVerticesNodeDirtyBitmap,((fNodes.Count+31) shr 5)+1);
 
@@ -26576,27 +25766,9 @@ begin
  fDrawChoreographyBatchUniqueItems.OwnsObjects:=true;
  fDrawChoreographyBatchUniqueItems.GroupInstanceClone(fGroup.fDrawChoreographyBatchUniqueItems,self,true);
 
- if fGroup.fDynamicAABBTreeCulling then begin
-  fAABBTree:=TpvBVHDynamicAABBTree.Create;
- end else begin
-  fAABBTree:=nil;
- end;
-
-{$ifdef DeferredAABBTreeUpdates}
- fDeferredAABBOperations.Initialize;
-{$endif}
-
 {$ifdef DeferredLightAABBTreeUpdates}
  fDeferredLightOperations.Initialize;
 {$endif}
-
- for Index:=0 to fSceneInstance.fCountInFlightFrames-1 do begin
-  fAABBTreeStates[Index].TreeNodes:=nil;
-  fAABBTreeStates[Index].Root:=-1;
-  fAABBTreeStates[Index].Generation:=High(TpvUInt64);
-  fAABBTreeSkipLists[Index].Items:=nil;
-  fAABBTreeSkipLists[Index].Count:=0;
- end;
 
  if assigned(fSceneInstance) then begin
   TPasMPInterlocked.Increment(fSceneInstance.fDataGeneration);
@@ -26645,24 +25817,8 @@ begin
 
  ReleaseData;
 
- if fAABBTreeProxy>=0 then begin
-  try
-   if assigned(fGroup) and
-      assigned(fGroup.fSceneInstance) and
-      assigned(fGroup.fSceneInstance.fAABBTree) then begin
-    fGroup.fSceneInstance.fAABBTree.DestroyProxy(fAABBTreeProxy);
-   end;
-  finally
-   fAABBTreeProxy:=-1;
-  end;
- end;
-
 {$ifdef DeferredLightAABBTreeUpdates}
  fDeferredLightOperations.Finalize;
-{$endif}
-
-{$ifdef DeferredAABBTreeUpdates}
- fDeferredAABBOperations.Finalize;
 {$endif}
 
  FreeAndNil(fDrawChoreographyBatchItems);
@@ -26722,16 +25878,6 @@ begin
  for Index:=0 to fSceneInstance.fCountInFlightFrames-1 do begin
   fCullVisibleBitmapLocks[Index]:=0;
   fCullVisibleBitmaps[Index]:=nil;
- end;
-
- FreeAndNil(fAABBTree);
-
- for Index:=0 to fSceneInstance.fCountInFlightFrames-1 do begin
-  fAABBTreeStates[Index].TreeNodes:=nil;
-  fAABBTreeStates[Index].Root:=-1;
-  fAABBTreeStates[Index].Generation:=High(TpvUInt64);
-  fAABBTreeSkipLists[Index].Items:=nil;
-  fAABBTreeSkipLists[Index].Count:=0;
  end;
 
  FreeAndNil(fNodes);
@@ -27371,18 +26517,6 @@ begin
      end;
     end;
 
-    if fAABBTreeProxy>=0 then begin
-     try
-      if assigned(fGroup) and
-         assigned(fGroup.fSceneInstance) and
-         assigned(fGroup.fSceneInstance.fAABBTree) then begin
-       fGroup.fSceneInstance.fAABBTree.DestroyProxy(fAABBTreeProxy);
-      end;
-     finally
-      fAABBTreeProxy:=-1;
-     end;
-    end;
-
     fAttachmentAppendageLock.Acquire;
     try
      if assigned(fAttachments) and (fAttachments.Count>0) then begin
@@ -27500,6 +26634,7 @@ procedure TpvScene3D.TGroup.TInstance.SetActive(const aActive:boolean);
 begin
  if fActive<>aActive then begin
   fActive:=aActive;
+  TPasMPInterlocked.Increment(fSceneInstance.fDrawDataGeneration);
   fSceneInstance.InvalidateDirectedAcyclicGraph;
  end;
 end;
@@ -30241,160 +29376,6 @@ begin
  end;
 end;
 
-procedure TpvScene3D.TGroup.TInstance.ProcessSkinNode(const aInFlightFrameIndex:TpvSizeInt;const aNode:TpvScene3D.TGroup.TNode;const aInstanceNode:TpvScene3D.TGroup.TInstance.TNode);
-// This procedure calculates a conservative worst-case bounding box for a node with a skinned animated mesh. It
-// approximates the bounding box for a given animation state using the mesh bounding box (which includes already
-// conservative morph vertices) and the joints used by the node. This method is not completely accurate but offers a
-// balance between performance and precision, as it avoids recalculating based on current transformed vertex positions.
-var JointIndex:TpvSizeInt;
-    Mesh:TpvScene3D.TGroup.TMesh;
-    Skin:TpvScene3D.TGroup.TSkin;
-    InverseMatrix:TpvMatrix4x4;
-    UsedJoint:TpvScene3D.TGroup.TNode.PUsedJoint;
-    BoundingBox:TpvAABB;
-begin
-
- Mesh:=aNode.fMesh;
- if assigned(Mesh) then begin
-
-  Skin:=aNode.fSkin;
-
-  // Obtain the inverse of the node's world matrix, if it is needed.
-  if assigned(Skin) then begin
-   InverseMatrix:=aInstanceNode.fWorkMatrix.Inverse;
-  end else begin
-   InverseMatrix:=TpvMatrix4x4.Identity;
-  end;
-
-  // Initialize the bounding box with the mesh bounding box, which already includes the worst-case scenario for morph vertices.
-  BoundingBox:=Mesh.fBoundingBox;
-
-  // Iterate over all joints used by the current node, considering each joint's largest weight which is used by the mesh vertices of the node.
-  // This aims to be conservative but not necessarily 100% accurate.
-  for JointIndex:=0 to aNode.fUsedJoints.Count-1 do begin
-
-   UsedJoint:=@aNode.fUsedJoints.Items[JointIndex];
-
-   // Update the bounding box by combining it with the transformed by-the-joint-affected-vertices bounding box using the joint matrix.
-   BoundingBox.DirectCombine(UsedJoint^.AABB.HomogenTransform((fNodeMatrices[UsedJoint^.Joint]*InverseMatrix)*UsedJoint^.Weight));
-
-  end;
-
-  // Transform the final bounding box using the node and model matrices and store it in the instance node.
-  aInstanceNode.fBoundingBoxes[aInFlightFrameIndex]:=BoundingBox.HomogenTransform(aInstanceNode.fWorkMatrix*fWorkModelMatrix);
-
-  // Indicate that the bounding box has been calculated for the instance node.
-  aInstanceNode.fBoundingBoxFilled[aInFlightFrameIndex]:=true;
-
- end;
-
-end;
-
-procedure TpvScene3D.TGroup.TInstance.GenerateAABBTreeSkipList(const aInFlightFrameIndex:TpvSizeInt);
-type TStackItem=record
-      NodeIndex:TpvSizeInt;
-      Pass:TpvSizeInt;
-      Level:TpvSizeInt;
-      SkipListItemIndex:TpvSizeInt;
-     end;
-     PStackItem=^TStackItem;
-     TStack=TpvDynamicFastStack<TStackItem>;
-var SkipListItemCount,SkipListItemIndex:TpvSizeInt;
-    Stack:TStack;
-    StackItem:TStackItem;
-    NewStackItem:PStackItem;
-    Node:TpvBVHDynamicAABBTree.PTreeNode;
-    SkipList:TpvScene3D.TGroup.TInstance.PAABBTreeSkipList;
-    SkipListItem:TpvScene3D.TGroup.TInstance.PAABBTreeSkipListItem;
-begin
-
- Stack.Initialize;
- try
-
-  if fAABBTree.Root>=0 then begin
-   NewStackItem:=Pointer(Stack.PushIndirect);
-   NewStackItem^.NodeIndex:=fAABBTree.Root;
-   NewStackItem^.Pass:=0;
-   NewStackItem^.Level:=0;
-   NewStackItem^.SkipListItemIndex:=0;
-  end;
-
-  SkipListItemCount:=0;
-
-  SkipList:=@fAABBTreeSkipLists[aInFlightFrameIndex];
-
-  SkipList^.Count:=0;
-
-  try
-
-   while Stack.Pop(StackItem) do begin
-
-    case StackItem.Pass of
-
-     0:begin
-
-      Node:=@fAABBTree.Nodes[StackItem.NodeIndex];
-
-      SkipListItemIndex:=SkipListItemCount;
-      inc(SkipListItemCount);
-
-      if length(SkipList^.Items)<SkipListItemCount then begin
-       SetLength(SkipList^.Items,SkipListItemCount+((SkipListItemCount+1) shr 1));
-      end;
-
-      SkipListItem:=@SkipList^.Items[SkipListItemIndex];
-      SkipListItem^.AABB:=Node.AABB;
-      SkipListItem^.UserData:=TpvPtrUInt(Node.UserData);
-      SkipListItem^.NodeIndex:=StackItem.NodeIndex;
-      SkipListItem^.Level:=StackItem.Level;
-      SkipListItem^.SkipCount:=1;
-
-      NewStackItem:=Pointer(Stack.PushIndirect);
-      NewStackItem^.NodeIndex:=StackItem.NodeIndex;
-      NewStackItem^.Pass:=1;
-      NewStackItem^.Level:=StackItem.Level;
-      NewStackItem^.SkipListItemIndex:=SkipListItemIndex;
-
-      if Node^.Children[1]>=0 then begin
-       NewStackItem:=Pointer(Stack.PushIndirect);
-       NewStackItem^.NodeIndex:=Node^.Children[1];
-       NewStackItem^.Pass:=0;
-       NewStackItem^.Level:=StackItem.Level+1;
-       NewStackItem^.SkipListItemIndex:=0;
-      end;
-
-      if Node^.Children[0]>=0 then begin
-       NewStackItem:=Pointer(Stack.PushIndirect);
-       NewStackItem^.NodeIndex:=Node^.Children[0];
-       NewStackItem^.Pass:=0;
-       NewStackItem^.Level:=StackItem.Level+1;
-       NewStackItem^.SkipListItemIndex:=0;
-      end;
-
-     end;
-
-     1:begin
-      SkipList^.Items[StackItem.SkipListItemIndex].SkipCount:=SkipListItemCount-StackItem.SkipListItemIndex;
-     end;
-
-     else begin
-      Assert(false);
-     end;
-
-    end;
-
-   end;
-
-  finally
-   SkipList^.Count:=SkipListItemCount;
-  end;
-
- finally
-  Stack.Finalize;
- end;
-
-end;
-
 procedure TpvScene3D.TGroup.TInstance.UpdateRenderInstances(const aInFlightFrameIndex:TpvSizeInt;const aInstanceUpdateDirtySkipped:Boolean);
 var Index,PerInFlightFrameRenderInstanceIndex:TpvSizeInt;
     First:Boolean;
@@ -30432,15 +29413,8 @@ begin
        end else begin
         fBoundingBox.DirectCombine(RenderInstance.fBoundingBox);
        end;
-       if assigned(fGroup.fSceneInstance.fPotentiallyVisibleSet) and
-          ((RenderInstance.fPotentiallyVisibleSetNodeIndex=TpvScene3D.TPotentiallyVisibleSet.NoNodeIndex) or
-           ((RenderInstance.fPotentiallyVisibleSetNodeIndex<>TpvScene3D.TPotentiallyVisibleSet.NoNodeIndex) and not
-            fSceneInstance.fPotentiallyVisibleSet.fNodes[RenderInstance.fPotentiallyVisibleSetNodeIndex].fAABB.Contains(RenderInstance.fBoundingBox))) then begin
-        RenderInstance.fPotentiallyVisibleSetNodeIndex:=fGroup.fSceneInstance.fPotentiallyVisibleSet.GetNodeIndexByAABB(RenderInstance.fBoundingBox);
-       end;
        PerInFlightFrameRenderInstanceIndex:=fPerInFlightFrameRenderInstances[aInFlightFrameIndex].AddNewIndex;
        PerInFlightFrameRenderInstance:=@fPerInFlightFrameRenderInstances[aInFlightFrameIndex].Items[PerInFlightFrameRenderInstanceIndex];
-       PerInFlightFrameRenderInstance^.PotentiallyVisibleSetNodeIndex:=RenderInstance.fPotentiallyVisibleSetNodeIndex;
        PerInFlightFrameRenderInstance^.BoundingBox:=RenderInstance.fBoundingBox;
        PerInFlightFrameRenderInstance^.RenderInstance:=RenderInstance;
        PerInFlightFrameRenderInstance^.ModelMatrix:=RenderInstance.fWorkModelMatrix;
@@ -30466,12 +29440,10 @@ begin
        RenderInstance.fWorkActives[aInFlightFrameIndex]:=false;
        if fUseSortedRenderInstances and
           (not RenderInstance.fFirst) and
-          (RenderInstance.fPotentiallyVisibleSetNodeIndex=TpvScene3D.TPotentiallyVisibleSet.NoNodeIndex) and
           ((RenderInstance.fActiveMask and (TpvUInt32(1) shl aInFlightFrameIndex))=0) then begin
         break;
        end else begin
         RenderInstance.fFirst:=true;
-        RenderInstance.fPotentiallyVisibleSetNodeIndex:=TpvScene3D.TPotentiallyVisibleSet.NoNodeIndex;
         TPasMPInterlocked.BitwiseAnd(RenderInstance.fActiveMask,not (TpvUInt32(1) shl aInFlightFrameIndex));
         RenderInstance.RemoveLights;
        end;
@@ -30707,13 +29679,6 @@ begin
      if assigned(InstanceNode.fLight) then begin
       FreeAndNil(InstanceNode.fLight);
      end;
-     if assigned(fAABBTree) and (InstanceNode.fAABBTreeProxy>=0) then begin
-      try
-       fAABBTree.DestroyProxy(InstanceNode.fAABBTreeProxy);
-      finally
-       InstanceNode.fAABBTreeProxy:=-1;
-      end;
-     end;
     end;
    end;
   end;
@@ -30779,7 +29744,10 @@ begin
     InstanceNode:=fNodes.RawItems[Node.Index];
     if assigned(Node.fMesh) then begin
      if assigned(Node.fSkin) then begin
-      ProcessSkinNode(aInFlightFrameIndex,Node,InstanceNode);
+      // Skinned nodes: use cheap static approximation for CPU-side bounds (instance-level BB combining).
+      // Exact per-node bounding sphere is computed by mesh_bounds.comp on GPU.
+      InstanceNode.fBoundingBoxes[aInFlightFrameIndex]:=Node.fMesh.fBoundingBox.HomogenTransform(InstanceNode.fWorkMatrix*fWorkModelMatrix);
+      InstanceNode.fBoundingBoxFilled[aInFlightFrameIndex]:=true;
      end else begin
       InstanceNode.fBoundingBoxes[aInFlightFrameIndex]:=Node.fMesh.fBoundingBox.HomogenTransform(InstanceNode.fWorkMatrix*fNodeMatrices[0]);
       InstanceNode.fBoundingBoxFilled[aInFlightFrameIndex]:=true;
@@ -30802,90 +29770,6 @@ begin
    EndCPUTime:=pvApplication.HighResolutionTimer.GetTime;
    fSceneInstance.fInstanceTimeBoundingSum:=fSceneInstance.fInstanceTimeBoundingSum+pvApplication.HighResolutionTimer.ToFloatSeconds(EndCPUTime-StartCPUTime)*1000.0;
 {$endif}
-
-  end;
-
- end;
-
-end;
-
-procedure TpvScene3D.TGroup.TInstance.UpdateNodePVS(const aInFlightFrameIndex:TpvSizeInt;const aScene:TpvScene3D.TGroup.TScene;const aInstanceUpdateDirtySkipped:Boolean);
-var Index:TpvSizeInt;
-    Node:TpvScene3D.TGroup.TNode;
-    InstanceNode:TpvScene3D.TGroup.TInstance.TNode;
-{$ifdef UpdateProfilingTimes}
-    StartCPUTime,EndCPUTime:TpvHighResolutionTime;
-{$endif}
-begin
-
- if assigned(aScene) then begin
-
-  if aInFlightFrameIndex>=0 then begin
-
-{$ifdef UpdateProfilingTimes}
-   StartCPUTime:=pvApplication.HighResolutionTimer.GetTime;
-{$endif}
-   for Index:=0 to aScene.fAllNodes.Count-1 do begin
-    Node:=aScene.fAllNodes[Index];
-    InstanceNode:=fNodes.RawItems[Node.Index];
-    if InstanceNode.fBoundingBoxFilled[aInFlightFrameIndex] then begin
-     if assigned(fGroup.fSceneInstance.fPotentiallyVisibleSet) and
-        ((InstanceNode.fPotentiallyVisibleSetNodeIndices[aInFlightFrameIndex]=TpvScene3D.TPotentiallyVisibleSet.NoNodeIndex) or
-         ((InstanceNode.fPotentiallyVisibleSetNodeIndices[aInFlightFrameIndex]<>TpvScene3D.TPotentiallyVisibleSet.NoNodeIndex) and not
-          fSceneInstance.fPotentiallyVisibleSet.fNodes[InstanceNode.fPotentiallyVisibleSetNodeIndices[aInFlightFrameIndex]].fAABB.Contains(InstanceNode.fBoundingBoxes[aInFlightFrameIndex]))) then begin
-      InstanceNode.fPotentiallyVisibleSetNodeIndices[aInFlightFrameIndex]:=fGroup.fSceneInstance.fPotentiallyVisibleSet.GetNodeIndexByAABB(InstanceNode.fBoundingBoxes[aInFlightFrameIndex]);
-     end;
-    end else begin
-     InstanceNode.fPotentiallyVisibleSetNodeIndices[aInFlightFrameIndex]:=TpvScene3D.TPotentiallyVisibleSet.NoNodeIndex;
-    end;
-   end;
-{$ifdef UpdateProfilingTimes}
-   EndCPUTime:=pvApplication.HighResolutionTimer.GetTime;
-   fSceneInstance.fInstanceTimePotentiallyVisibleSetSum:=fSceneInstance.fInstanceTimePotentiallyVisibleSetSum+pvApplication.HighResolutionTimer.ToFloatSeconds(EndCPUTime-StartCPUTime)*1000.0;
-{$endif}
-
-  end;
-
- end;
-
-end;
-
-procedure TpvScene3D.TGroup.TInstance.UpdateNodeAABBTree(const aInFlightFrameIndex:TpvSizeInt;const aScene:TpvScene3D.TGroup.TScene;const aInstanceUpdateDirtySkipped:Boolean);
-var Index:TpvSizeInt;
-    Node:TpvScene3D.TGroup.TNode;
-    InstanceNode:TpvScene3D.TGroup.TInstance.TNode;
-{$ifdef UpdateProfilingTimes}
-    StartCPUTime,EndCPUTime:TpvHighResolutionTime;
-{$endif}
-begin
-
- if assigned(aScene) then begin
-
-  if aInFlightFrameIndex>=0 then begin
-
-   if assigned(fAABBTree) then begin
-{$ifdef UpdateProfilingTimes}
-    StartCPUTime:=pvApplication.HighResolutionTimer.GetTime;
-{$endif}
-    for Index:=0 to aScene.fAllNodes.Count-1 do begin
-     Node:=aScene.fAllNodes[Index];
-     InstanceNode:=fNodes.RawItems[Node.Index];
-     if InstanceNode.fBoundingBoxFilled[aInFlightFrameIndex] and assigned(Node.Mesh) then begin
-      if InstanceNode.fAABBTreeProxy<0 then begin
-       InstanceNode.fAABBTreeProxy:=fAABBTree.CreateProxy(InstanceNode.fBoundingBoxes[aInFlightFrameIndex],TpvPtrInt(Node.fIndex)+1);
-      end else begin
-       fAABBTree.MoveProxy(InstanceNode.fAABBTreeProxy,InstanceNode.fBoundingBoxes[aInFlightFrameIndex],TpvVector3.Null,TpvVector3.AllAxis,true);
-      end;
-     end else if InstanceNode.fAABBTreeProxy>=0 then begin
-      fAABBTree.DestroyProxy(InstanceNode.fAABBTreeProxy);
-      InstanceNode.fAABBTreeProxy:=-1;
-     end;
-    end;
-{$ifdef UpdateProfilingTimes}
-    EndCPUTime:=pvApplication.HighResolutionTimer.GetTime;
-    fSceneInstance.fInstanceTimeAABBTreeSum:=fSceneInstance.fInstanceTimeAABBTreeSum+pvApplication.HighResolutionTimer.ToFloatSeconds(EndCPUTime-StartCPUTime)*1000.0;
-{$endif}
-   end;
 
   end;
 
@@ -30926,7 +29810,11 @@ begin
    InstanceNode:=fNodes.RawItems[Node.Index];
    if InstanceNode.fBoundingBoxFilled[aInFlightFrameIndex] and assigned(Node.Mesh) then begin
     InstanceNode.fBoundingSpheres[aInFlightFrameIndex]:=TpvSphere.CreateFromAABB(InstanceNode.fBoundingBoxes[aInFlightFrameIndex]);
-    fSceneInstance.fGlobalBoundingSphereDynamicArrays[aInFlightFrameIndex][InstanceNode.fBoundingSphereIndex]:=InstanceNode.fBoundingSpheres[aInFlightFrameIndex].Vector4;
+    if not assigned(Node.fSkin) then begin
+     // Static nodes: write bounding sphere for staging upload.
+     // Skinned nodes: mesh_bounds.comp writes exact bounds directly to GPU buffer.
+     fSceneInstance.fGlobalBoundingSphereDynamicArrays[aInFlightFrameIndex][InstanceNode.fBoundingSphereIndex]:=InstanceNode.fBoundingSpheres[aInFlightFrameIndex].Vector4;
+    end;
    end;
   end;
  end;
@@ -30934,73 +29822,6 @@ begin
 {$ifdef UpdateProfilingTimes}
  EndCPUTime:=pvApplication.HighResolutionTimer.GetTime;
  fSceneInstance.fInstanceTimeBoundingSum:=fSceneInstance.fInstanceTimeBoundingSum+pvApplication.HighResolutionTimer.ToFloatSeconds(EndCPUTime-StartCPUTime)*1000.0;
-{$endif}
-
-end;
-
-procedure TpvScene3D.TGroup.TInstance.UpdateInstancePVS(const aInFlightFrameIndex:TpvSizeInt;const aScene:TpvScene3D.TGroup.TScene;const aInstanceUpdateDirtySkipped:Boolean);
-{$ifdef UpdateProfilingTimes}
-var StartCPUTime,EndCPUTime:TpvHighResolutionTime;
-{$endif}
-begin
-{$ifdef UpdateProfilingTimes}
- StartCPUTime:=pvApplication.HighResolutionTimer.GetTime;
-{$endif}
- if aInFlightFrameIndex>=0 then begin
-  if fUseRenderInstances then begin
-   fPotentiallyVisibleSetNodeIndices[aInFlightFrameIndex]:=TpvScene3D.TPotentiallyVisibleSet.NoNodeIndex;
-  end else if assigned(fGroup.fSceneInstance.fPotentiallyVisibleSet) and
-              ((fPotentiallyVisibleSetNodeIndices[aInFlightFrameIndex]=TpvScene3D.TPotentiallyVisibleSet.NoNodeIndex) or
-               ((fPotentiallyVisibleSetNodeIndices[aInFlightFrameIndex]<>TpvScene3D.TPotentiallyVisibleSet.NoNodeIndex) and not
-                fSceneInstance.fPotentiallyVisibleSet.fNodes[fPotentiallyVisibleSetNodeIndices[aInFlightFrameIndex]].fAABB.Contains(fBoundingBox))) then begin
-   fPotentiallyVisibleSetNodeIndices[aInFlightFrameIndex]:=fGroup.fSceneInstance.fPotentiallyVisibleSet.GetNodeIndexByAABB(fBoundingBox);
-  end;
- end;
-{$ifdef UpdateProfilingTimes}
- EndCPUTime:=pvApplication.HighResolutionTimer.GetTime;
- fSceneInstance.fInstanceTimePotentiallyVisibleSetSum:=fSceneInstance.fInstanceTimePotentiallyVisibleSetSum+pvApplication.HighResolutionTimer.ToFloatSeconds(EndCPUTime-StartCPUTime)*1000.0;
-{$endif}
-end;
-
-procedure TpvScene3D.TGroup.TInstance.UpdateGlobalAABBProxy(const aInFlightFrameIndex:TpvSizeInt;const aInstanceUpdateDirtySkipped:Boolean);
-var Index:TpvSizeInt;
-{$ifdef UpdateProfilingTimes}
-    StartCPUTime,EndCPUTime:TpvHighResolutionTime;
-{$endif}
-begin
-
-{$ifdef UpdateProfilingTimes}
- StartCPUTime:=pvApplication.HighResolutionTimer.GetTime;
-{$endif}
-{$ifdef DeferredAABBTreeUpdates}
- if fAABBTreeProxy<0 then begin
-  AddDeferredAABBOperation(TDeferredAABBOperationType.Create_,fGroup.fSceneInstance.fAABBTree,@fAABBTreeProxy,fBoundingBox,TpvPtrInt(Pointer(self)));
- end else begin
-  if fUseRenderInstances then begin
-   AddDeferredAABBOperation(TDeferredAABBOperationType.Move,fGroup.fSceneInstance.fAABBTree,@fAABBTreeProxy,TpvAABB.Create(-TpvVector3.AllMaxAxis,TpvVector3.AllMaxAxis),0);
-  end else begin
-   AddDeferredAABBOperation(TDeferredAABBOperationType.Move,fGroup.fSceneInstance.fAABBTree,@fAABBTreeProxy,fBoundingBox,0);
-  end;
- end;
-{$else}
- fGroup.fSceneInstance.fAABBTreeLock.Acquire;
- try
-  if fAABBTreeProxy<0 then begin
-   fAABBTreeProxy:=fGroup.fSceneInstance.fAABBTree.CreateProxy(fBoundingBox,TpvPtrInt(Pointer(self)));
-  end else begin
-   if fUseRenderInstances then begin
-    fGroup.fSceneInstance.fAABBTree.MoveProxy(fAABBTreeProxy,TpvAABB.Create(-TpvVector3.AllMaxAxis,TpvVector3.AllMaxAxis),TpvVector3.Null,TpvVector3.AllAxis,true);
-   end else begin
-    fGroup.fSceneInstance.fAABBTree.MoveProxy(fAABBTreeProxy,fBoundingBox,TpvVector3.Null,TpvVector3.AllAxis,true);
-   end;
-  end;
- finally
-  fGroup.fSceneInstance.fAABBTreeLock.Release;
- end;
-{$endif}
-{$ifdef UpdateProfilingTimes}
- EndCPUTime:=pvApplication.HighResolutionTimer.GetTime;
- fSceneInstance.fInstanceTimeAABBTreeSum:=fSceneInstance.fInstanceTimeAABBTreeSum+pvApplication.HighResolutionTimer.ToFloatSeconds(EndCPUTime-StartCPUTime)*1000.0;
 {$endif}
 
 end;
@@ -31026,33 +29847,6 @@ begin
   fActiveScenes[aInFlightFrameIndex]:=nil;
  end;
 
- if fAABBTreeProxy>=0 then begin
-{$ifdef DeferredAABBTreeUpdates}
-  if assigned(fGroup) and
-     assigned(fGroup.fSceneInstance) and
-     assigned(fGroup.fSceneInstance.fAABBTree) then begin
-   AddDeferredAABBOperation(TDeferredAABBOperationType.Destroy_,fGroup.fSceneInstance.fAABBTree,@fAABBTreeProxy,TpvAABB.Create(TpvVector3.Origin,TpvVector3.Origin),0);
-  end else begin
-   fAABBTreeProxy:=-1;
-  end;
-{$else}
-  try
-   if assigned(fGroup) and
-      assigned(fGroup.fSceneInstance) and
-      assigned(fGroup.fSceneInstance.fAABBTree) then begin
-    fGroup.fSceneInstance.fAABBTreeLock.Acquire;
-    try
-     fGroup.fSceneInstance.fAABBTree.DestroyProxy(fAABBTreeProxy);
-    finally
-     fGroup.fSceneInstance.fAABBTreeLock.Release;
-    end;
-   end;
-  finally
-   fAABBTreeProxy:=-1;
-  end;
-{$endif}
- end;
-
  for Index:=0 to fNodes.Count-1 do begin
   InstanceNode:=fNodes.RawItems[Index];
   if assigned(InstanceNode.fLight) then begin
@@ -31068,22 +29862,6 @@ begin
    end;
 {$endif}
   end;
-  if assigned(fAABBTree) and (InstanceNode.fAABBTreeProxy>=0) then begin
-{$ifdef DeferredAABBTreeUpdates}
-   AddDeferredAABBOperation(TDeferredAABBOperationType.Destroy_,fAABBTree,@InstanceNode.fAABBTreeProxy,TpvAABB.Create(TpvVector3.Origin,TpvVector3.Origin),0);
-{$else}
-   try
-    fGroup.fSceneInstance.fAABBTreeLock.Acquire;
-    try
-     fAABBTree.DestroyProxy(InstanceNode.fAABBTreeProxy);
-    finally
-     fGroup.fSceneInstance.fAABBTreeLock.Release;
-    end;
-   finally
-    InstanceNode.fAABBTreeProxy:=-1;
-   end;
-{$endif}
-  end;
  end;
 
  if fRenderInstances.Count>0 then begin
@@ -31093,7 +29871,6 @@ begin
     RenderInstance:=fRenderInstances[Index];
     RenderInstance.fFirst:=true;
     TPasMPInterlocked.BitwiseAnd(RenderInstance.fActiveMask,not (TpvUInt32(1) shl aInFlightFrameIndex));
-    RenderInstance.fPotentiallyVisibleSetNodeIndex:=TpvScene3D.TPotentiallyVisibleSet.NoNodeIndex;
    end;
   finally
    TPasMPMultipleReaderSingleWriterSpinLock.ReleaseRead(fRenderInstanceLock);
@@ -31104,69 +29881,11 @@ begin
 
   fPerInFlightFrameRenderInstances[aInFlightFrameIndex].Count:=0;
 
-  fPotentiallyVisibleSetNodeIndices[aInFlightFrameIndex]:=TpvScene3D.TPotentiallyVisibleSet.NoNodeIndex;
-
   fBoundingBoxes[aInFlightFrameIndex]:=TpvAABB.Create(TpvVector3.Origin,TpvVector3.Origin);
 
  end;
 
  fPreviousActive:=false;
-
-end;
-
-procedure TpvScene3D.TGroup.TInstance.UpdateLocalAABBTreeState(const aInFlightFrameIndex:TpvSizeInt;const aInstanceUpdateDirtySkipped:Boolean);
-var Index:TpvSizeInt;
-    AABBTreeState:TpvBVHDynamicAABBTree.PState;
-    AABBTreeNode:TpvBVHDynamicAABBTree.PTreeNode;
-    AABBTreeNodePotentiallyVisibleSet:TpvScene3D.TPotentiallyVisibleSet.TNodeIndex;
-{$ifdef UpdateProfilingTimes}
-    StartCPUTime,EndCPUTime:TpvHighResolutionTime;
-{$endif}
-begin
-
-{$ifdef UpdateProfilingTimes}
- StartCPUTime:=pvApplication.HighResolutionTimer.GetTime;
-{$endif}
- AABBTreeState:=@fAABBTreeStates[aInFlightFrameIndex];
- if assigned(fAABBTree) then begin
-  fAABBTree.UpdateGeneration;
-  if AABBTreeState^.Generation<>fAABBTree.Generation then begin
-   AABBTreeState^.Generation:=fAABBTree.Generation;
-   if (length(fAABBTree.Nodes)>0) and (fAABBTree.Root>=0) then begin
-    if assigned(fGroup.fSceneInstance.fPotentiallyVisibleSet) then begin
-     for Index:=0 to length(fAABBTree.Nodes)-1 do begin
-      AABBTreeNode:=@fAABBTree.Nodes[Index];
-      if (AABBTreeNode^.UserData=0) or ((TpvPtrUInt(AABBTreeNode^.UserData) and TpvUInt32($80000000))<>0) then begin
-       if AABBTreeNode^.UserData=0 then begin
-        AABBTreeNodePotentiallyVisibleSet:=TpvScene3D.TPotentiallyVisibleSet.NoNodeIndex;
-       end else begin
-        AABBTreeNodePotentiallyVisibleSet:=TpvPtrUInt(AABBTreeNode^.UserData) and TpvUInt32($7fffffff);
-       end;
-       if ((AABBTreeNodePotentiallyVisibleSet=TpvScene3D.TPotentiallyVisibleSet.NoNodeIndex) or
-           ((AABBTreeNodePotentiallyVisibleSet<>TpvScene3D.TPotentiallyVisibleSet.NoNodeIndex) and not
-           fSceneInstance.fPotentiallyVisibleSet.fNodes[AABBTreeNodePotentiallyVisibleSet].fAABB.Contains(AABBTreeNode^.AABB))) then begin
-        AABBTreeNodePotentiallyVisibleSet:=fGroup.fSceneInstance.fPotentiallyVisibleSet.GetNodeIndexByAABB(AABBTreeNode^.AABB);
-        if AABBTreeNodePotentiallyVisibleSet=TpvScene3D.TPotentiallyVisibleSet.NoNodeIndex then begin
-         AABBTreeNode^.UserData:=0;
-        end else begin
-         AABBTreeNode^.UserData:=TpvPtrInt(TpvPtrUInt(AABBTreeNodePotentiallyVisibleSet or TpvUInt32($80000000)));
-        end;
-       end;
-      end;
-     end;
-    end;
-    GenerateAABBTreeSkipList(aInFlightFrameIndex);
-   end else begin
-    fAABBTreeSkipLists[aInFlightFrameIndex].Count:=0;
-   end;
-  end;
- end else begin
-  fAABBTreeSkipLists[aInFlightFrameIndex].Count:=0;
- end;
-{$ifdef UpdateProfilingTimes}
- EndCPUTime:=pvApplication.HighResolutionTimer.GetTime;
- fSceneInstance.fInstanceTimeAABBTreeSum:=fSceneInstance.fInstanceTimeAABBTreeSum+pvApplication.HighResolutionTimer.ToFloatSeconds(EndCPUTime-StartCPUTime)*1000.0;
-{$endif}
 
 end;
 
@@ -31201,15 +29920,14 @@ begin
   InstanceNode.fBoundingBoxes[aInFlightFrameIndex]:=InstanceNode.fBoundingBoxes[PreviousInFlightFrameIndex];
   InstanceNode.fBoundingBoxFilled[aInFlightFrameIndex]:=InstanceNode.fBoundingBoxFilled[PreviousInFlightFrameIndex];
   InstanceNode.fBoundingSpheres[aInFlightFrameIndex]:=InstanceNode.fBoundingSpheres[PreviousInFlightFrameIndex];
-  InstanceNode.fPotentiallyVisibleSetNodeIndices[aInFlightFrameIndex]:=InstanceNode.fPotentiallyVisibleSetNodeIndices[PreviousInFlightFrameIndex];
   if InstanceNode.fBoundingBoxFilled[aInFlightFrameIndex] and assigned(fGroup.fNodes[Index].Mesh) then begin
-   fSceneInstance.fGlobalBoundingSphereDynamicArrays[aInFlightFrameIndex][InstanceNode.fBoundingSphereIndex]:=InstanceNode.fBoundingSpheres[aInFlightFrameIndex].Vector4;
+   if not assigned(fGroup.fNodes[Index].fSkin) then begin
+    fSceneInstance.fGlobalBoundingSphereDynamicArrays[aInFlightFrameIndex][InstanceNode.fBoundingSphereIndex]:=InstanceNode.fBoundingSpheres[aInFlightFrameIndex].Vector4;
+   end;
   end;
   InstanceNode.Update(aInFlightFrameIndex);
  end;
 
- // Copy per-InFlightFrame PVS
- fPotentiallyVisibleSetNodeIndices[aInFlightFrameIndex]:=fPotentiallyVisibleSetNodeIndices[PreviousInFlightFrameIndex];
 
  RenderInstanceDirty:=fSceneInstance.fUpdatedOriginTransform;
  if fUseRenderInstances and (fRenderInstances.Count>0) and not RenderInstanceDirty then begin
@@ -31235,18 +29953,13 @@ begin
 
  if RenderInstanceDirty then begin
 
-{ UpdateNodeBounds(aInFlightFrameIndex,aScene,true);
-  UpdateNodePVS(aInFlightFrameIndex,aScene,true);
-  UpdateNodeAABBTree(aInFlightFrameIndex,aScene,true);}
+//UpdateNodeBounds(aInFlightFrameIndex,aScene,true);
 
   UpdateInstanceBounds(aInFlightFrameIndex,aScene,true);
-  UpdateInstancePVS(aInFlightFrameIndex,aScene,true);
 
   UpdateRenderInstances(aInFlightFrameIndex,true);
 
   UpdateBoundingVolumes(aInFlightFrameIndex,true);
-
-  UpdateGlobalAABBProxy(aInFlightFrameIndex,true);
 
  end else begin
 
@@ -31338,30 +30051,16 @@ begin
   IsActive:=false;
  end;
 
- if fActive and fSceneInstance.fUpdateCulling.fActive then begin
-  TemporaryVector:=fGroup.fBoundingBox.Max-fGroup.fBoundingBox.Min;
+ // GPU-driven: no CPU frustum culling, all active instances always go to GPU
+ if fActive then begin
   if fUseRenderInstances and (fRenderInstances.Count>0) then begin
    CanUpdate:=false;
    for Index:=0 to fRenderInstances.Count-1 do begin
     RenderInstance:=fRenderInstances[Index];
-    if RenderInstance.fActive then begin
-     if fBoundingRadius>0.0 then begin
-      RenderInstance.fWorkActive:=fSceneInstance.fUpdateCulling.Check(RenderInstance.ModelMatrix,fBoundingRadius);
-     end else begin
-      RenderInstance.fWorkActive:=fSceneInstance.fUpdateCulling.Check(RenderInstance.ModelMatrix,TemporaryVector);
-     end;
-     if RenderInstance.fWorkActive then begin
-      CanUpdate:=true;
-     end;
-    end else begin
-     RenderInstance.fWorkActive:=false;
+    RenderInstance.fWorkActive:=RenderInstance.fActive;
+    if RenderInstance.fWorkActive then begin
+     CanUpdate:=true;
     end;
-   end;
-  end else if not fUseRenderInstances then begin
-   if fBoundingRadius>0.0 then begin
-    CanUpdate:=fSceneInstance.fUpdateCulling.Check(fModelMatrix,fBoundingRadius);
-   end else begin
-    CanUpdate:=fSceneInstance.fUpdateCulling.Check(fModelMatrix,TemporaryVector);
    end;
   end else begin
    CanUpdate:=true;
@@ -31434,17 +30133,12 @@ begin
    UpdateSkins(aInFlightFrameIndex,false);
 
    UpdateNodeBounds(aInFlightFrameIndex,Scene,false);
-   UpdateNodePVS(aInFlightFrameIndex,Scene,false);
-   UpdateNodeAABBTree(aInFlightFrameIndex,Scene,false);
 
    UpdateInstanceBounds(aInFlightFrameIndex,Scene,false);
-   UpdateInstancePVS(aInFlightFrameIndex,Scene,false);
 
    UpdateRenderInstances(aInFlightFrameIndex,false);
 
    UpdateBoundingVolumes(aInFlightFrameIndex,false);
-
-   UpdateGlobalAABBProxy(aInFlightFrameIndex,false);
 
 {$ifdef InstanceUpdateDirtySkip}
   end; // if not InstanceUpdateDirtySkipped
@@ -31474,7 +30168,6 @@ begin
  end;
 
  if aInFlightFrameIndex>=0 then begin
-  UpdateLocalAABBTreeState(aInFlightFrameIndex,{$ifdef InstanceUpdateDirtySkip}InstanceUpdateDirtySkipped{$else}false{$endif});
  end;
 
  fLastUpdateInFlightFrameIndex:=aInFlightFrameIndex;
@@ -31494,9 +30187,6 @@ var Index,OtherIndex,PerInFlightFrameRenderInstanceIndex:TpvSizeInt;
     IsActive,HasMaterialUpdate,Dirty,First,CanUpdate,ActiveAnimationProcessing:boolean;
     RenderInstance:TpvScene3D.TGroup.TInstance.TRenderInstance;
     PerInFlightFrameRenderInstance:TpvScene3D.TGroup.TInstance.PPerInFlightFrameRenderInstance;
-    AABBTreeState:TpvBVHDynamicAABBTree.PState;
-    AABBTreeNode:TpvBVHDynamicAABBTree.PTreeNode;
-    AABBTreeNodePotentiallyVisibleSet:TpvScene3D.TPotentiallyVisibleSet.TNodeIndex;
 {$ifdef UpdateProfilingTimes}
     StartCPUTime,EndCPUTime:TpvHighResolutionTime;
 {$endif}
@@ -31555,30 +30245,16 @@ begin
   IsActive:=false;
  end;
 
- if fActive and fSceneInstance.fUpdateCulling.fActive then begin
-  TemporaryVector:=fGroup.fBoundingBox.Max-fGroup.fBoundingBox.Min;
+ // GPU-driven: no CPU frustum culling, all active instances always go to GPU
+ if fActive then begin
   if fUseRenderInstances and (fRenderInstances.Count>0) then begin
    CanUpdate:=false;
    for Index:=0 to fRenderInstances.Count-1 do begin
     RenderInstance:=fRenderInstances[Index];
-    if RenderInstance.fActive then begin
-     if fBoundingRadius>0.0 then begin
-      RenderInstance.fWorkActive:=fSceneInstance.fUpdateCulling.Check(RenderInstance.ModelMatrix,fBoundingRadius);
-     end else begin
-      RenderInstance.fWorkActive:=fSceneInstance.fUpdateCulling.Check(RenderInstance.ModelMatrix,TemporaryVector);
-     end;
-     if RenderInstance.fWorkActive then begin
-      CanUpdate:=true;
-     end;
-    end else begin
-     RenderInstance.fWorkActive:=false;
+    RenderInstance.fWorkActive:=RenderInstance.fActive;
+    if RenderInstance.fWorkActive then begin
+     CanUpdate:=true;
     end;
-   end;
-  end else if not fUseRenderInstances then begin
-   if fBoundingRadius>0.0 then begin
-    CanUpdate:=fSceneInstance.fUpdateCulling.Check(fModelMatrix,fBoundingRadius);
-   end else begin
-    CanUpdate:=fSceneInstance.fUpdateCulling.Check(fModelMatrix,TemporaryVector);
    end;
   end else begin
    CanUpdate:=true;
@@ -31683,15 +30359,13 @@ begin
     InstanceNode.fBoundingBoxes[aInFlightFrameIndex]:=InstanceNode.fBoundingBoxes[PreviousInFlightFrameIndex];
     InstanceNode.fBoundingBoxFilled[aInFlightFrameIndex]:=InstanceNode.fBoundingBoxFilled[PreviousInFlightFrameIndex];
     InstanceNode.fBoundingSpheres[aInFlightFrameIndex]:=InstanceNode.fBoundingSpheres[PreviousInFlightFrameIndex];
-    InstanceNode.fPotentiallyVisibleSetNodeIndices[aInFlightFrameIndex]:=InstanceNode.fPotentiallyVisibleSetNodeIndices[PreviousInFlightFrameIndex];
     if InstanceNode.fBoundingBoxFilled[aInFlightFrameIndex] and assigned(fGroup.fNodes[Index].Mesh) then begin
-     fSceneInstance.fGlobalBoundingSphereDynamicArrays[aInFlightFrameIndex][InstanceNode.fBoundingSphereIndex]:=InstanceNode.fBoundingSpheres[aInFlightFrameIndex].Vector4;
+     if not assigned(fGroup.fNodes[Index].fSkin) then begin
+      fSceneInstance.fGlobalBoundingSphereDynamicArrays[aInFlightFrameIndex][InstanceNode.fBoundingSphereIndex]:=InstanceNode.fBoundingSpheres[aInFlightFrameIndex].Vector4;
+     end;
     end;
     InstanceNode.Update(aInFlightFrameIndex);
    end;
-
-   // Copy per-InFlightFrame PVS
-   fPotentiallyVisibleSetNodeIndices[aInFlightFrameIndex]:=fPotentiallyVisibleSetNodeIndices[PreviousInFlightFrameIndex];
 
    if RenderInstanceDirty then begin
 
@@ -31889,13 +30563,6 @@ begin
        if assigned(InstanceNode.fLight) then begin
         FreeAndNil(InstanceNode.fLight);
        end;
-       if assigned(fAABBTree) and (InstanceNode.fAABBTreeProxy>=0) then begin
-        try
-         fAABBTree.DestroyProxy(InstanceNode.fAABBTreeProxy);
-        finally
-         InstanceNode.fAABBTreeProxy:=-1;
-        end;
-       end;
       end;
      end;
     end;
@@ -31944,7 +30611,10 @@ begin
         ProcessMorphSkinNode(Node,InstanceNode);
        end else//}
        if assigned(Node.fSkin) then begin
-        ProcessSkinNode(aInFlightFrameIndex,Node,InstanceNode);
+        // Skinned nodes: use cheap static approximation for CPU-side bounds.
+        // Exact per-node bounding sphere is computed by mesh_bounds.comp on GPU.
+        InstanceNode.fBoundingBoxes[aInFlightFrameIndex]:=Node.fMesh.fBoundingBox.HomogenTransform(InstanceNode.fWorkMatrix*fWorkModelMatrix);
+        InstanceNode.fBoundingBoxFilled[aInFlightFrameIndex]:=true;
        end else begin
         InstanceNode.fBoundingBoxes[aInFlightFrameIndex]:=Node.fMesh.fBoundingBox.HomogenTransform(InstanceNode.fWorkMatrix*fNodeMatrices[0]);
         InstanceNode.fBoundingBoxFilled[aInFlightFrameIndex]:=true;
@@ -31967,56 +30637,6 @@ begin
      EndCPUTime:=pvApplication.HighResolutionTimer.GetTime;
      fSceneInstance.fInstanceTimeBoundingSum:=fSceneInstance.fInstanceTimeBoundingSum+pvApplication.HighResolutionTimer.ToFloatSeconds(EndCPUTime-StartCPUTime)*1000.0;
 {$endif}
-
-    end;
-
-    if aInFlightFrameIndex>=0 then begin
-
-{$ifdef UpdateProfilingTimes}
-     StartCPUTime:=pvApplication.HighResolutionTimer.GetTime;
-{$endif}
-     for Index:=0 to Scene.fAllNodes.Count-1 do begin
-      Node:=Scene.fAllNodes[Index];
-      InstanceNode:=fNodes.RawItems[Node.Index];
-      if InstanceNode.fBoundingBoxFilled[aInFlightFrameIndex] then begin
-       if assigned(fGroup.fSceneInstance.fPotentiallyVisibleSet) and
-          ((InstanceNode.fPotentiallyVisibleSetNodeIndices[aInFlightFrameIndex]=TpvScene3D.TPotentiallyVisibleSet.NoNodeIndex) or
-           ((InstanceNode.fPotentiallyVisibleSetNodeIndices[aInFlightFrameIndex]<>TpvScene3D.TPotentiallyVisibleSet.NoNodeIndex) and not
-            fSceneInstance.fPotentiallyVisibleSet.fNodes[InstanceNode.fPotentiallyVisibleSetNodeIndices[aInFlightFrameIndex]].fAABB.Contains(InstanceNode.fBoundingBoxes[aInFlightFrameIndex]))) then begin
-        InstanceNode.fPotentiallyVisibleSetNodeIndices[aInFlightFrameIndex]:=fGroup.fSceneInstance.fPotentiallyVisibleSet.GetNodeIndexByAABB(InstanceNode.fBoundingBoxes[aInFlightFrameIndex]);
-       end;
-      end else begin
-       InstanceNode.fPotentiallyVisibleSetNodeIndices[aInFlightFrameIndex]:=TpvScene3D.TPotentiallyVisibleSet.NoNodeIndex;
-      end;
-     end;
-{$ifdef UpdateProfilingTimes}
-     EndCPUTime:=pvApplication.HighResolutionTimer.GetTime;
-     fSceneInstance.fInstanceTimePotentiallyVisibleSetSum:=fSceneInstance.fInstanceTimePotentiallyVisibleSetSum+pvApplication.HighResolutionTimer.ToFloatSeconds(EndCPUTime-StartCPUTime)*1000.0;
-{$endif}
-
-     if assigned(fAABBTree) then begin
-{$ifdef UpdateProfilingTimes}
-      StartCPUTime:=pvApplication.HighResolutionTimer.GetTime;
-{$endif}
-      for Index:=0 to Scene.fAllNodes.Count-1 do begin
-       Node:=Scene.fAllNodes[Index];
-       InstanceNode:=fNodes.RawItems[Node.Index];
-       if InstanceNode.fBoundingBoxFilled[aInFlightFrameIndex] and assigned(Node.Mesh) then begin
-        if InstanceNode.fAABBTreeProxy<0 then begin
-         InstanceNode.fAABBTreeProxy:=fAABBTree.CreateProxy(InstanceNode.fBoundingBoxes[aInFlightFrameIndex],TpvPtrInt(Node.fIndex)+1);
-        end else begin
-         fAABBTree.MoveProxy(InstanceNode.fAABBTreeProxy,InstanceNode.fBoundingBoxes[aInFlightFrameIndex],TpvVector3.Null,TpvVector3.AllAxis,true);
-        end;
-       end else if InstanceNode.fAABBTreeProxy>=0 then begin
-        fAABBTree.DestroyProxy(InstanceNode.fAABBTreeProxy);
-        InstanceNode.fAABBTreeProxy:=-1;
-       end;
-      end;
-{$ifdef UpdateProfilingTimes}
-      EndCPUTime:=pvApplication.HighResolutionTimer.GetTime;
-      fSceneInstance.fInstanceTimeAABBTreeSum:=fSceneInstance.fInstanceTimeAABBTreeSum+pvApplication.HighResolutionTimer.ToFloatSeconds(EndCPUTime-StartCPUTime)*1000.0;
-{$endif}
-     end;
 
     end;
 
@@ -32044,7 +30664,11 @@ begin
      InstanceNode:=fNodes.RawItems[Node.Index];
      if InstanceNode.fBoundingBoxFilled[aInFlightFrameIndex] and assigned(Node.Mesh) then begin
       InstanceNode.fBoundingSpheres[aInFlightFrameIndex]:=TpvSphere.CreateFromAABB(InstanceNode.fBoundingBoxes[aInFlightFrameIndex]);
-      fSceneInstance.fGlobalBoundingSphereDynamicArrays[aInFlightFrameIndex][InstanceNode.fBoundingSphereIndex]:=InstanceNode.fBoundingSpheres[aInFlightFrameIndex].Vector4;
+      if not assigned(Node.fSkin) then begin
+       // Static nodes: write bounding sphere for staging upload.
+       // Skinned nodes: mesh_bounds.comp writes exact bounds directly to GPU buffer.
+       fSceneInstance.fGlobalBoundingSphereDynamicArrays[aInFlightFrameIndex][InstanceNode.fBoundingSphereIndex]:=InstanceNode.fBoundingSpheres[aInFlightFrameIndex].Vector4;
+      end;
      end;
     end;
    end;
@@ -32056,58 +30680,6 @@ begin
    UpdateRenderInstances(aInFlightFrameIndex,false);
 
    UpdateBoundingVolumes(aInFlightFrameIndex,false);
-
-   if aInFlightFrameIndex>=0 then begin
-{$ifdef UpdateProfilingTimes}
-    StartCPUTime:=pvApplication.HighResolutionTimer.GetTime;
-{$endif}
-    if fUseRenderInstances then begin
-     fPotentiallyVisibleSetNodeIndices[aInFlightFrameIndex]:=TpvScene3D.TPotentiallyVisibleSet.NoNodeIndex;
-    end else if assigned(fGroup.fSceneInstance.fPotentiallyVisibleSet) and
-                ((fPotentiallyVisibleSetNodeIndices[aInFlightFrameIndex]=TpvScene3D.TPotentiallyVisibleSet.NoNodeIndex) or
-                 ((fPotentiallyVisibleSetNodeIndices[aInFlightFrameIndex]<>TpvScene3D.TPotentiallyVisibleSet.NoNodeIndex) and not
-                  fSceneInstance.fPotentiallyVisibleSet.fNodes[fPotentiallyVisibleSetNodeIndices[aInFlightFrameIndex]].fAABB.Contains(fBoundingBox))) then begin
-     fPotentiallyVisibleSetNodeIndices[aInFlightFrameIndex]:=fGroup.fSceneInstance.fPotentiallyVisibleSet.GetNodeIndexByAABB(fBoundingBox);
-    end;
-{$ifdef UpdateProfilingTimes}
-    EndCPUTime:=pvApplication.HighResolutionTimer.GetTime;
-    fSceneInstance.fInstanceTimePotentiallyVisibleSetSum:=fSceneInstance.fInstanceTimePotentiallyVisibleSetSum+pvApplication.HighResolutionTimer.ToFloatSeconds(EndCPUTime-StartCPUTime)*1000.0;
-{$endif}
-   end;
-
- {$ifdef UpdateProfilingTimes}
-   StartCPUTime:=pvApplication.HighResolutionTimer.GetTime;
- {$endif}
-{$ifdef DeferredAABBTreeUpdates}
-   if fAABBTreeProxy<0 then begin
-    AddDeferredAABBOperation(TDeferredAABBOperationType.Create_,fGroup.fSceneInstance.fAABBTree,@fAABBTreeProxy,fBoundingBox,TpvPtrInt(Pointer(self)));
-   end else begin
-    if fUseRenderInstances then begin
-     AddDeferredAABBOperation(TDeferredAABBOperationType.Move,fGroup.fSceneInstance.fAABBTree,@fAABBTreeProxy,TpvAABB.Create(-TpvVector3.AllMaxAxis,TpvVector3.AllMaxAxis),0);
-    end else begin
-     AddDeferredAABBOperation(TDeferredAABBOperationType.Move,fGroup.fSceneInstance.fAABBTree,@fAABBTreeProxy,fBoundingBox,0);
-    end;
-   end;
-{$else}
-   fGroup.fSceneInstance.fAABBTreeLock.Acquire;
-   try
-    if fAABBTreeProxy<0 then begin
-     fAABBTreeProxy:=fGroup.fSceneInstance.fAABBTree.CreateProxy(fBoundingBox,TpvPtrInt(Pointer(self)));
-    end else begin
-     if fUseRenderInstances then begin
-      fGroup.fSceneInstance.fAABBTree.MoveProxy(fAABBTreeProxy,TpvAABB.Create(-TpvVector3.AllMaxAxis,TpvVector3.AllMaxAxis),TpvVector3.Null,TpvVector3.AllAxis,true);
-     end else begin
-      fGroup.fSceneInstance.fAABBTree.MoveProxy(fAABBTreeProxy,fBoundingBox,TpvVector3.Null,TpvVector3.AllAxis,true);
-     end;
-    end;
-   finally
-    fGroup.fSceneInstance.fAABBTreeLock.Release;
-   end;
-{$endif}
-{$ifdef UpdateProfilingTimes}
-   EndCPUTime:=pvApplication.HighResolutionTimer.GetTime;
-   fSceneInstance.fInstanceTimeAABBTreeSum:=fSceneInstance.fInstanceTimeAABBTreeSum+pvApplication.HighResolutionTimer.ToFloatSeconds(EndCPUTime-StartCPUTime)*1000.0;
-{$endif}
 
    if aInFlightFrameIndex>=0 then begin
 
@@ -32139,33 +30711,6 @@ begin
    fActiveScenes[aInFlightFrameIndex]:=nil;
   end;
 
-  if fAABBTreeProxy>=0 then begin
-{$ifdef DeferredAABBTreeUpdates}
-   if assigned(fGroup) and
-      assigned(fGroup.fSceneInstance) and
-      assigned(fGroup.fSceneInstance.fAABBTree) then begin
-    AddDeferredAABBOperation(TDeferredAABBOperationType.Destroy_,fGroup.fSceneInstance.fAABBTree,@fAABBTreeProxy,TpvAABB.Create(TpvVector3.Origin,TpvVector3.Origin),0);
-   end else begin
-    fAABBTreeProxy:=-1;
-   end;
-{$else}
-   try
-    if assigned(fGroup) and
-       assigned(fGroup.fSceneInstance) and
-       assigned(fGroup.fSceneInstance.fAABBTree) then begin
-     fGroup.fSceneInstance.fAABBTreeLock.Acquire;
-     try
-      fGroup.fSceneInstance.fAABBTree.DestroyProxy(fAABBTreeProxy);
-     finally
-      fGroup.fSceneInstance.fAABBTreeLock.Release;
-     end;
-    end;
-   finally
-    fAABBTreeProxy:=-1;
-   end;
-{$endif}
-  end;
-
   for Index:=0 to fNodes.Count-1 do begin
    InstanceNode:=fNodes.RawItems[Index];
    if assigned(InstanceNode.fLight) then begin
@@ -32181,22 +30726,6 @@ begin
     end;
 {$endif}
    end;
-   if assigned(fAABBTree) and (InstanceNode.fAABBTreeProxy>=0) then begin
-{$ifdef DeferredAABBTreeUpdates}
-    AddDeferredAABBOperation(TDeferredAABBOperationType.Destroy_,fAABBTree,@InstanceNode.fAABBTreeProxy,TpvAABB.Create(TpvVector3.Origin,TpvVector3.Origin),0);
-{$else}
-    try
-     fGroup.fSceneInstance.fAABBTreeLock.Acquire;
-     try
-      fAABBTree.DestroyProxy(InstanceNode.fAABBTreeProxy);
-     finally
-      fGroup.fSceneInstance.fAABBTreeLock.Release;
-     end;
-    finally
-     InstanceNode.fAABBTreeProxy:=-1;
-    end;
-{$endif}
-   end;
   end;
 
   if fRenderInstances.Count>0 then begin
@@ -32206,7 +30735,6 @@ begin
      RenderInstance:=fRenderInstances[Index];
      RenderInstance.fFirst:=true;
      TPasMPInterlocked.BitwiseAnd(RenderInstance.fActiveMask,not (TpvUInt32(1) shl aInFlightFrameIndex));
-     RenderInstance.fPotentiallyVisibleSetNodeIndex:=TpvScene3D.TPotentiallyVisibleSet.NoNodeIndex;
     end;
    finally
     TPasMPMultipleReaderSingleWriterSpinLock.ReleaseRead(fRenderInstanceLock);
@@ -32216,8 +30744,6 @@ begin
   if aInFlightFrameIndex>=0 then begin
 
    fPerInFlightFrameRenderInstances[aInFlightFrameIndex].Count:=0;
-
-   fPotentiallyVisibleSetNodeIndices[aInFlightFrameIndex]:=TpvScene3D.TPotentiallyVisibleSet.NoNodeIndex;
 
    fBoundingBoxes[aInFlightFrameIndex]:=TpvAABB.Create(TpvVector3.Origin,TpvVector3.Origin);
 
@@ -32229,62 +30755,6 @@ begin
 
  if aInFlightFrameIndex>=0 then begin
   fActives[aInFlightFrameIndex]:=IsActive;
- end;
-
- if aInFlightFrameIndex>=0 then begin
-{$ifdef UpdateProfilingTimes}
-  StartCPUTime:=pvApplication.HighResolutionTimer.GetTime;
-{$endif}
-  AABBTreeState:=@fAABBTreeStates[aInFlightFrameIndex];
-  if assigned(fAABBTree) then begin
-// fAABBTree.Rebuild(false);
-   fAABBTree.UpdateGeneration;
-   if AABBTreeState^.Generation<>fAABBTree.Generation then begin
-    AABBTreeState^.Generation:=fAABBTree.Generation;
-    if (length(fAABBTree.Nodes)>0) and (fAABBTree.Root>=0) then begin
-     if assigned(fGroup.fSceneInstance.fPotentiallyVisibleSet) then begin
-      for Index:=0 to length(fAABBTree.Nodes)-1 do begin
-       AABBTreeNode:=@fAABBTree.Nodes[Index];
-       if (AABBTreeNode^.UserData=0) or ((TpvPtrUInt(AABBTreeNode^.UserData) and TpvUInt32($80000000))<>0) then begin
-        if AABBTreeNode^.UserData=0 then begin
-         AABBTreeNodePotentiallyVisibleSet:=TpvScene3D.TPotentiallyVisibleSet.NoNodeIndex;
-        end else begin
-         AABBTreeNodePotentiallyVisibleSet:=TpvPtrUInt(AABBTreeNode^.UserData) and TpvUInt32($7fffffff);
-        end;
-        if ((AABBTreeNodePotentiallyVisibleSet=TpvScene3D.TPotentiallyVisibleSet.NoNodeIndex) or
-            ((AABBTreeNodePotentiallyVisibleSet<>TpvScene3D.TPotentiallyVisibleSet.NoNodeIndex) and not
-            fSceneInstance.fPotentiallyVisibleSet.fNodes[AABBTreeNodePotentiallyVisibleSet].fAABB.Contains(AABBTreeNode^.AABB))) then begin
-         AABBTreeNodePotentiallyVisibleSet:=fGroup.fSceneInstance.fPotentiallyVisibleSet.GetNodeIndexByAABB(AABBTreeNode^.AABB);
-         if AABBTreeNodePotentiallyVisibleSet=TpvScene3D.TPotentiallyVisibleSet.NoNodeIndex then begin
-          AABBTreeNode^.UserData:=0;
-         end else begin
-          AABBTreeNode^.UserData:=TpvPtrInt(TpvPtrUInt(AABBTreeNodePotentiallyVisibleSet or TpvUInt32($80000000)));
-         end;
-        end;
-       end;
-      end;
-     end;
-{    if length(AABBTreeState^.TreeNodes)<length(fAABBTree.Nodes) then begin
-      AABBTreeState^.TreeNodes:=copy(fAABBTree.Nodes);
-     end else begin
-      Move(fAABBTree.Nodes[0],AABBTreeState^.TreeNodes[0],length(fAABBTree.Nodes)*SizeOf(TpvBVHDynamicAABBTree.TTreeNode));
-     end;
-     AABBTreeState^.Root:=fAABBTree.Root;}
-     GenerateAABBTreeSkipList(aInFlightFrameIndex);
-    end else begin
-//   AABBTreeState^.Root:=-1;
-     fAABBTreeSkipLists[aInFlightFrameIndex].Count:=0;
-    end;
-   end;
-  end else begin
-{  AABBTreeState^.Root:=-1;
-   AABBTreeState^.Generation:=High(TpvUInt64);}
-   fAABBTreeSkipLists[aInFlightFrameIndex].Count:=0;
-  end;
-{$ifdef UpdateProfilingTimes}
-  EndCPUTime:=pvApplication.HighResolutionTimer.GetTime;
-  fSceneInstance.fInstanceTimeAABBTreeSum:=fSceneInstance.fInstanceTimeAABBTreeSum+pvApplication.HighResolutionTimer.ToFloatSeconds(EndCPUTime-StartCPUTime)*1000.0;
-{$endif}
  end;
 
 end;
@@ -33041,16 +31511,12 @@ end;
 
 procedure TpvScene3D.TGroup.TInstance.PreparePerInFlightFrameRenderInstances(const aInFlightFrameIndex:TpvSizeInt;
                                                                              const aRenderPass:TpvScene3DRendererRenderPass;
-                                                                             const aViewNodeIndices:TpvScene3D.TPotentiallyVisibleSet.TViewNodeIndices;
                                                                              const aViewBaseIndex:TpvSizeInt;
                                                                              const aCountViews:TpvSizeInt;
                                                                              const aFrustums:TpvFrustumDynamicArray;
-                                                                             const aPotentiallyVisibleSetCulling:boolean;
                                                                              out aFirstInstance:TpvSizeInt;
                                                                              out aInstancesCount:TpvSizeInt);
-var PerInFlightFrameRenderInstanceIndex,FrustumIndex,ViewIndex,InstancesCount:TpvSizeInt;
-    ViewPotentiallyVisibleSetNodeIndex:TpvScene3D.TPotentiallyVisibleSet.TNodeIndex;
-    DoCulling,PotentiallyVisible:boolean;
+var PerInFlightFrameRenderInstanceIndex,InstancesCount:TpvSizeInt;
     GlobalVulkanDrawInfoDynamicArray:PGlobalVulkanDrawInfoDynamicArray;
     GlobalRenderInstanceCullDataDynamicArray:PGlobalRenderInstanceCullDataDynamicArray;
     GlobalRenderInstanceCullData:PCullData;
@@ -33072,45 +31538,14 @@ begin
 
   InstancesCount:=0;
 
-  DoCulling:=fGroup.fCulling and ((length(aFrustums)>0) or aPotentiallyVisibleSetCulling);
-
   PerInFlightFrameRenderInstanceDynamicArray:=@fPerInFlightFrameRenderInstances[aInFlightFrameIndex];
 
   for PerInFlightFrameRenderInstanceIndex:=0 to PerInFlightFrameRenderInstanceDynamicArray^.Count-1 do begin
 
    PerInFlightFrameRenderInstance:=@PerInFlightFrameRenderInstanceDynamicArray.Items[PerInFlightFrameRenderInstanceIndex];
 
-   PotentiallyVisible:=true;
-
-   if DoCulling then begin
-
-    if length(aFrustums)>0 then begin
-     PotentiallyVisible:=false;
-     for FrustumIndex:=0 to length(aFrustums)-1 do begin
-      if aFrustums[FrustumIndex].AABBInFrustum(PerInFlightFrameRenderInstance^.BoundingBox)<>TpvFrustum.COMPLETE_OUT then begin
-       PotentiallyVisible:=true;
-       break;
-      end;
-     end;
-    end;
-
-    if PotentiallyVisible and aPotentiallyVisibleSetCulling then begin
-     if PerInFlightFrameRenderInstance^.PotentiallyVisibleSetNodeIndex<>TpvScene3D.TPotentiallyVisibleSet.NoNodeIndex then begin
-      PotentiallyVisible:=false;
-      for ViewIndex:=aViewBaseIndex to (aViewBaseIndex+aCountViews)-1 do begin
-       ViewPotentiallyVisibleSetNodeIndex:=aViewNodeIndices[ViewIndex];
-       if (ViewPotentiallyVisibleSetNodeIndex=TpvScene3D.TPotentiallyVisibleSet.NoNodeIndex) or
-          fSceneInstance.fPotentiallyVisibleSet.GetNodeVisibility(PerInFlightFrameRenderInstance^.PotentiallyVisibleSetNodeIndex,ViewPotentiallyVisibleSetNodeIndex) then begin
-        PotentiallyVisible:=true;
-        break;
-       end;
-      end;
-     end;
-    end;
-
-   end;
-
-   if PotentiallyVisible then begin
+   // GPU-driven: no CPU PVS/Frustum culling, all active render instances go to GPU
+   begin
     // DrawInfo entry for this instanced render instance (BDA pointers filled later per frame)
     FillChar(GlobalVulkanDrawInfoDynamicArray^.AddNew^,SizeOf(TGPUDrawInfo),#0);
     CurrentDrawInfo:=@GlobalVulkanDrawInfoDynamicArray^.ItemArray[GlobalVulkanDrawInfoDynamicArray^.Count-1];
@@ -33140,29 +31575,21 @@ end;
 procedure TpvScene3D.TGroup.TInstance.Prepare(const aInFlightFrameIndex:TpvSizeInt;
                                               const aRendererInstance:TObject;
                                               const aRenderPass:TpvScene3DRendererRenderPass;
-                                              const aViewNodeIndices:TpvScene3D.TPotentiallyVisibleSet.TViewNodeIndices;
                                               const aViewBaseIndex:TpvSizeInt;
                                               const aCountViews:TpvSizeInt;
                                               const aFrustums:TpvFrustumDynamicArray;
-                                              const aPotentiallyVisibleSetCulling:boolean;
                                               const aMaterialAlphaModes:TpvScene3D.TMaterial.TAlphaModes;
                                               const aFrustumCullMask:TpvUInt32;
                                               const aShadowPass:Boolean);
-var ViewIndex,FrustumIndex,SkipListItemIndex,SkipListItemCount,DrawChoreographyBatchItemIndex,
+var SkipListItemIndex,SkipListItemCount,DrawChoreographyBatchItemIndex,
     DrawChoreographyBatchItemElementIndex,FirstInstance,InstancesCount:TpvSizeInt;
-    PotentiallyVisibleSetNodeIndex,
-    ViewPotentiallyVisibleSetNodeIndex:TpvScene3D.TPotentiallyVisibleSet.TNodeIndex;
-    Masks:array[-1..31] of TpvUInt32;
     RendererInstanceID:TpvUInt32;
-    HaveNodeFilter:Boolean;
     GroupOnNodeFilter,GlobalOnNodeFilter:TpvScene3D.TGroup.TInstance.TOnNodeFilter;
     Scene:TpvScene3D.TGroup.TScene;
     Node:TpvScene3D.TGroup.TNode;
     InstanceNode:TpvScene3D.TGroup.TInstance.TNode;
     DrawChoreographyBatchItemMaterialAlphaModeBuckets:PDrawChoreographyBatchItemMaterialAlphaModeBuckets;
-    PotentiallyVisible,DoCulling:boolean;
-    AABBTreeSkipList:TpvScene3D.TGroup.TInstance.PAABBTreeSkipList;
-    AABBTreeSkipListItem:TpvScene3D.TGroup.TInstance.PAABBTreeSkipListItem;
+    PotentiallyVisible:boolean;
     SkipListItem:TpvScene3D.TGroup.TScene.PSkipListItem;
     DrawChoreographyBatchItemIndices:PSizeIntDynamicArray;
     DrawChoreographyBatchItem:TpvScene3D.TDrawChoreographyBatchItem;
@@ -33182,314 +31609,61 @@ begin
 
   if assigned(Scene) then begin
 
-   PotentiallyVisible:=true;
-
-   DoCulling:=fGroup.fCulling and not fUseRenderInstances;
-
    DrawChoreographyBatchItemMaterialAlphaModeBuckets:=@TpvScene3DRendererInstance(aRendererInstance).DrawChoreographyBatchItemFrameBuckets[aInFlightFrameIndex,aRenderPass];
 
-   if assigned(fAABBTree) then begin
+   // GPU-driven: flat SkipList iteration, no CPU PVS/Frustum culling
+   SkipListItemIndex:=0;
 
-    AABBTreeSkipList:=@fAABBTreeSkipLists[aInFlightFrameIndex];
+   SkipListItemCount:=length(Scene.fSkipList);
 
-    if AABBTreeSkipList^.Count>0 then begin
+   while SkipListItemIndex<SkipListItemCount do begin
 
-     HaveNodeFilter:=(length(fCullVisibleBitmaps[aInFlightFrameIndex])>0) and
-                     (assigned(fOnNodeFilter) or
-                      assigned(GroupOnNodeFilter) or
-                      assigned(GlobalOnNodeFilter));
+    SkipListItem:=@Scene.fSkipList[SkipListItemIndex];
 
-     if HaveNodeFilter then begin
-      TPasMPMultipleReaderSingleWriterSpinLock.AcquireWrite(fCullVisibleBitmapLocks[aInFlightFrameIndex]);
-     end;
-     try
+    Node:=fGroup.fNodes[SkipListItem^.NodeIndex];
 
-      if HaveNodeFilter then begin
+    InstanceNode:=fNodes.RawItems[SkipListItem^.NodeIndex];
 
-       FillChar(fCullVisibleBitmaps[aInFlightFrameIndex][0],length(fCullVisibleBitmaps[aInFlightFrameIndex])*SizeOf(TpvUInt32),#0);
+    PotentiallyVisible:=InstanceNode.fInFlightFrameVisible[aInFlightFrameIndex];
 
-       SkipListItemIndex:=0;
-       SkipListItemCount:=length(Scene.fSkipList);
-       while SkipListItemIndex<SkipListItemCount do begin
-        SkipListItem:=@Scene.fSkipList[SkipListItemIndex];
-        Node:=fGroup.fNodes[SkipListItem^.NodeIndex];
-        InstanceNode:=fNodes.RawItems[SkipListItem^.NodeIndex];
-        if (((not assigned(fOnNodeFilter)) or fOnNodeFilter(aInFlightFrameIndex,aRendererInstance,aRenderPass,Group,self,Node,InstanceNode)) and
-            ((not assigned(GroupOnNodeFilter)) or GroupOnNodeFilter(aInFlightFrameIndex,aRendererInstance,aRenderPass,Group,self,Node,InstanceNode)) and
-            ((not assigned(GlobalOnNodeFilter)) or GlobalOnNodeFilter(aInFlightFrameIndex,aRendererInstance,aRenderPass,Group,self,Node,InstanceNode))) then begin
-         fCullVisibleBitmaps[aInFlightFrameIndex][SkipListItem^.NodeIndex shr 5]:=fCullVisibleBitmaps[aInFlightFrameIndex][SkipListItem^.NodeIndex shr 5] or (TpvUInt32(1) shl (SkipListItem^.NodeIndex and 31));
-         inc(SkipListItemIndex);
-        end else begin
-         if SkipListItem^.SkipCount<=0 then begin
-          break;
-         end else begin
-          inc(SkipListItemIndex,SkipListItem^.SkipCount);
-         end;
-        end;
+    if PotentiallyVisible and
+       (((not assigned(fOnNodeFilter)) or fOnNodeFilter(aInFlightFrameIndex,aRendererInstance,aRenderPass,Group,self,Node,InstanceNode)) and
+        ((not assigned(GroupOnNodeFilter)) or GroupOnNodeFilter(aInFlightFrameIndex,aRendererInstance,aRenderPass,Group,self,Node,InstanceNode)) and
+        ((not assigned(GlobalOnNodeFilter)) or GlobalOnNodeFilter(aInFlightFrameIndex,aRendererInstance,aRenderPass,Group,self,Node,InstanceNode))) then begin
+
+     DrawChoreographyBatchItemIndices:=@Node.fDrawChoreographyBatchItemIndices;
+     for DrawChoreographyBatchItemIndex:=0 to DrawChoreographyBatchItemIndices^.Count-1 do begin
+      DrawChoreographyBatchItemElementIndex:=DrawChoreographyBatchItemIndices^.Items[DrawChoreographyBatchItemIndex];
+      DrawChoreographyBatchItem:=fDrawChoreographyBatchItems[DrawChoreographyBatchItemElementIndex];
+      EffectiveMaterial:=DrawChoreographyBatchItem.fMaterial;
+      if fGroup.fHasLODs and (EffectiveMaterial.fLODMaterialIndices.Count>0) then begin
+       MaterialLODLevel:=InstanceNode.fInFlightFrameActiveLODLevel[aInFlightFrameIndex];
+       if MaterialLODLevel>EffectiveMaterial.fLODMaterialIndices.Count then begin
+        MaterialLODLevel:=EffectiveMaterial.fLODMaterialIndices.Count;
        end;
-
+       if (MaterialLODLevel>0) and (EffectiveMaterial.fLODMaterialIndices.ItemArray[MaterialLODLevel-1]>=0) and (EffectiveMaterial.fLODMaterialIndices.ItemArray[MaterialLODLevel-1]<fGroup.fMaterials.Count) then begin
+        EffectiveMaterial:=fGroup.fMaterials[EffectiveMaterial.fLODMaterialIndices.ItemArray[MaterialLODLevel-1]];
+       end;
       end;
-
-      Masks[-1]:=TpvUInt32($ffffffff);
-
-      SkipListItemIndex:=0;
-      SkipListItemCount:=AABBTreeSkipList^.Count;
-      while SkipListItemIndex<SkipListItemCount do begin
-
-       AABBTreeSkipListItem:=@AABBTreeSkipList.Items[SkipListItemIndex];
-
-       PotentiallyVisible:=true;
-
-       if DoCulling then begin
-
-        if AABBTreeSkipListItem^.Level<=High(Masks) then begin
-         Masks[AABBTreeSkipListItem^.Level]:=Masks[AABBTreeSkipListItem^.Level-1];
-        end;
-
-        if aPotentiallyVisibleSetCulling then begin
-
-         if (AABBTreeSkipListItem^.UserData and TpvUInt32($80000000))<>0 then begin
-
-          PotentiallyVisibleSetNodeIndex:=AABBTreeSkipListItem^.UserData and TpvUInt32($7fffffff);
-          if PotentiallyVisibleSetNodeIndex<>TpvScene3D.TPotentiallyVisibleSet.NoNodeIndex then begin
-           PotentiallyVisible:=false;
-           for ViewIndex:=aViewBaseIndex to (aViewBaseIndex+aCountViews)-1 do begin
-            ViewPotentiallyVisibleSetNodeIndex:=aViewNodeIndices[ViewIndex];
-            if (ViewPotentiallyVisibleSetNodeIndex=TpvScene3D.TPotentiallyVisibleSet.NoNodeIndex) or
-               fSceneInstance.fPotentiallyVisibleSet.GetNodeVisibility(PotentiallyVisibleSetNodeIndex,ViewPotentiallyVisibleSetNodeIndex) then begin
-             PotentiallyVisible:=true;
-             break;
-            end;
-           end;
-          end;
-
-         end else if (AABBTreeSkipListItem^.UserData>=1) and (AABBTreeSkipListItem^.UserData<=TpvUInt32($7fffffff)) then begin
-
-          PotentiallyVisibleSetNodeIndex:=fNodes.RawItems[AABBTreeSkipListItem^.UserData-1].fPotentiallyVisibleSetNodeIndices[aInFlightFrameIndex];
-          if PotentiallyVisibleSetNodeIndex<>TpvScene3D.TPotentiallyVisibleSet.NoNodeIndex then begin
-           PotentiallyVisible:=false;
-           for ViewIndex:=aViewBaseIndex to (aViewBaseIndex+aCountViews)-1 do begin
-            ViewPotentiallyVisibleSetNodeIndex:=aViewNodeIndices[ViewIndex];
-            if (ViewPotentiallyVisibleSetNodeIndex=TpvScene3D.TPotentiallyVisibleSet.NoNodeIndex) or
-               fSceneInstance.fPotentiallyVisibleSet.GetNodeVisibility(PotentiallyVisibleSetNodeIndex,ViewPotentiallyVisibleSetNodeIndex) then begin
-             PotentiallyVisible:=true;
-             break;
-            end;
-           end;
-          end;
-
-         end;
-
-        end;
-
-        if PotentiallyVisible and (length(aFrustums)>0) then begin
-         if (AABBTreeSkipListItem^.UserData>=1) and (AABBTreeSkipListItem^.UserData<=TpvUInt32($7fffffff)) then begin
-          InstanceNode:=fNodes.RawItems[AABBTreeSkipListItem^.UserData-1];
-          if length(aFrustums)=1 then begin
-           if AABBTreeSkipListItem^.Level<=High(Masks) then begin
-            PotentiallyVisible:=(Masks[AABBTreeSkipListItem^.Level-1]=$40000000) or not ((((Masks[AABBTreeSkipListItem^.Level] and $80000000)<>0) and (aFrustums[0].AABBInFrustum(InstanceNode.fBoundingBoxes[aInFlightFrameIndex],Masks[AABBTreeSkipListItem^.Level])=TpvFrustum.COMPLETE_OUT)));
-           end else begin
-            PotentiallyVisible:=aFrustums[0].AABBInFrustum(InstanceNode.fBoundingBoxes[aInFlightFrameIndex])<>TpvFrustum.COMPLETE_OUT;
-           end;
-          end else begin
-           PotentiallyVisible:=false;
-           for FrustumIndex:=0 to length(aFrustums)-1 do begin
-            if aFrustums[FrustumIndex].AABBInFrustum(InstanceNode.fBoundingBoxes[aInFlightFrameIndex])<>TpvFrustum.COMPLETE_OUT then begin
-             PotentiallyVisible:=true;
-             break;
-            end;
-           end;
-          end;
-         end else begin
-          if length(aFrustums)=1 then begin
-           if AABBTreeSkipListItem^.Level<=High(Masks) then begin
-            PotentiallyVisible:=(Masks[AABBTreeSkipListItem^.Level-1]=$40000000) or not ((((Masks[AABBTreeSkipListItem^.Level] and $80000000)<>0) and (aFrustums[0].AABBInFrustum(AABBTreeSkipListItem^.AABB,Masks[AABBTreeSkipListItem^.Level])=TpvFrustum.COMPLETE_OUT)));
-           end else begin
-            PotentiallyVisible:=aFrustums[0].AABBInFrustum(AABBTreeSkipListItem^.AABB)<>TpvFrustum.COMPLETE_OUT;
-           end;
-          end else begin
-           PotentiallyVisible:=false;
-           for FrustumIndex:=0 to length(aFrustums)-1 do begin
-            if aFrustums[FrustumIndex].AABBInFrustum(AABBTreeSkipListItem^.AABB)<>TpvFrustum.COMPLETE_OUT then begin
-             PotentiallyVisible:=true;
-             break;
-            end;
-           end;
-          end;
-         end;
-        end;
-
-       end;
-
-       if PotentiallyVisible then begin
-
-        if (AABBTreeSkipListItem^.UserData>=1) and (AABBTreeSkipListItem^.UserData<=TpvUInt32($7fffffff)) then begin
-
-         Node:=fGroup.fNodes[AABBTreeSkipListItem^.UserData-1];
-
-         if (not HaveNodeFilter) or
-            ((fCullVisibleBitmaps[aInFlightFrameIndex][Node.Index shr 5] and (TpvUInt32(1) shl (Node.Index and 31))<>0)) then begin
-
-          InstanceNode:=fNodes.RawItems[AABBTreeSkipListItem^.UserData-1];
-
-          if InstanceNode.fInFlightFrameVisible[aInFlightFrameIndex] then begin
-
-           DrawChoreographyBatchItemIndices:=@Node.fDrawChoreographyBatchItemIndices;
-           for DrawChoreographyBatchItemIndex:=0 to DrawChoreographyBatchItemIndices^.Count-1 do begin
-            DrawChoreographyBatchItemElementIndex:=DrawChoreographyBatchItemIndices^.Items[DrawChoreographyBatchItemIndex];
-            DrawChoreographyBatchItem:=fDrawChoreographyBatchItems[DrawChoreographyBatchItemElementIndex];
-            EffectiveMaterial:=DrawChoreographyBatchItem.fMaterial;
-            if fGroup.fHasLODs and (EffectiveMaterial.fLODMaterialIndices.Count>0) then begin
-             MaterialLODLevel:=InstanceNode.fInFlightFrameActiveLODLevel[aInFlightFrameIndex];
-             if MaterialLODLevel>EffectiveMaterial.fLODMaterialIndices.Count then begin
-              MaterialLODLevel:=EffectiveMaterial.fLODMaterialIndices.Count;
-             end;
-             if (MaterialLODLevel>0) and (EffectiveMaterial.fLODMaterialIndices.ItemArray[MaterialLODLevel-1]>=0) and (EffectiveMaterial.fLODMaterialIndices.ItemArray[MaterialLODLevel-1]<fGroup.fMaterials.Count) then begin
-              EffectiveMaterial:=fGroup.fMaterials[EffectiveMaterial.fLODMaterialIndices.ItemArray[MaterialLODLevel-1]];
-             end;
-            end;
-            if EffectiveMaterial.fVisible and
-               (DrawChoreographyBatchItem.fAlphaMode in aMaterialAlphaModes) and
-               ((not aShadowPass) or (aShadowPass and EffectiveMaterial.fData.CastingShadows and InstanceNode.fInFlightFrameCastingShadows[aInFlightFrameIndex])) and
-              (DrawChoreographyBatchItem.fCountIndices>0) then begin
-             DrawChoreographyBatchItemMaterialAlphaModeBuckets^[DrawChoreographyBatchItem.fAlphaMode,
-                                                                DrawChoreographyBatchItem.fPrimitiveTopology,
-                                                                DoubleSidedFaceCullingModes[DrawChoreographyBatchItem.fDoubleSided,
-                                                                                            InstanceNode.InverseFrontFaces]].Add(DrawChoreographyBatchItem);
-            end;
-           end;
-
-          end;
-
-         end;
-
-        end;
-
-        inc(SkipListItemIndex);
-
-       end else begin
-
-        if AABBTreeSkipListItem^.SkipCount<=0 then begin
-         break;
-        end else begin
-         inc(SkipListItemIndex,AABBTreeSkipListItem^.SkipCount);
-        end;
-
-       end;
-
-      end;
-
-     finally
-      if HaveNodeFilter then begin
-       TPasMPMultipleReaderSingleWriterSpinLock.ReleaseWrite(fCullVisibleBitmapLocks[aInFlightFrameIndex]);
+      if EffectiveMaterial.fVisible and
+         (DrawChoreographyBatchItem.fAlphaMode in aMaterialAlphaModes) and
+         ((not aShadowPass) or (aShadowPass and EffectiveMaterial.fData.CastingShadows and InstanceNode.fInFlightFrameCastingShadows[aInFlightFrameIndex])) and
+        (DrawChoreographyBatchItem.fCountIndices>0) then begin
+       DrawChoreographyBatchItemMaterialAlphaModeBuckets^[DrawChoreographyBatchItem.fAlphaMode,
+                                                          DrawChoreographyBatchItem.fPrimitiveTopology,
+                                                          DoubleSidedFaceCullingModes[DrawChoreographyBatchItem.fDoubleSided,
+                                                                                      InstanceNode.InverseFrontFaces]].Add(DrawChoreographyBatchItem);
       end;
      end;
 
-    end;
+     inc(SkipListItemIndex);
 
-   end else begin
+    end else begin
 
-    Masks[-1]:=TpvUInt32($ffffffff);
-
-    SkipListItemIndex:=0;
-
-    SkipListItemCount:=length(Scene.fSkipList);
-
-    while SkipListItemIndex<SkipListItemCount do begin
-
-     SkipListItem:=@Scene.fSkipList[SkipListItemIndex];
-
-     Node:=fGroup.fNodes[SkipListItem^.NodeIndex];
-
-     InstanceNode:=fNodes.RawItems[SkipListItem^.NodeIndex];
-
-     PotentiallyVisible:=InstanceNode.fInFlightFrameVisible[aInFlightFrameIndex];
-
-     if DoCulling then begin
-
-      if SkipListItem^.Level<=High(Masks) then begin
-       Masks[SkipListItem^.Level]:=Masks[SkipListItem^.Level-1];
-      end;
-
-      if aPotentiallyVisibleSetCulling then begin
-       PotentiallyVisibleSetNodeIndex:=InstanceNode.fPotentiallyVisibleSetNodeIndices[aInFlightFrameIndex];
-       if PotentiallyVisibleSetNodeIndex<>TpvScene3D.TPotentiallyVisibleSet.NoNodeIndex then begin
-        PotentiallyVisible:=false;
-        for ViewIndex:=aViewBaseIndex to (aViewBaseIndex+aCountViews)-1 do begin
-         ViewPotentiallyVisibleSetNodeIndex:=aViewNodeIndices[ViewIndex];
-         if (ViewPotentiallyVisibleSetNodeIndex=TpvScene3D.TPotentiallyVisibleSet.NoNodeIndex) or
-            fSceneInstance.fPotentiallyVisibleSet.GetNodeVisibility(PotentiallyVisibleSetNodeIndex,ViewPotentiallyVisibleSetNodeIndex) then begin
-          PotentiallyVisible:=true;
-          break;
-         end;
-        end;
-       end;
-      end;
-
-      if PotentiallyVisible then begin
-       if InstanceNode.fBoundingBoxFilled[aInFlightFrameIndex] then begin
-        if length(aFrustums)>0 then begin
-         if length(aFrustums)=1 then begin
-          if SkipListItem^.Level<=High(Masks) then begin
-           PotentiallyVisible:=(Masks[SkipListItem^.Level-1]=$40000000) or not ((((Masks[SkipListItem^.Level] and $80000000)<>0) and (aFrustums[0].AABBInFrustum(InstanceNode.fBoundingBoxes[aInFlightFrameIndex],Masks[SkipListItem^.Level])=TpvFrustum.COMPLETE_OUT)));
-          end else begin
-           PotentiallyVisible:=aFrustums[0].AABBInFrustum(InstanceNode.fBoundingBoxes[aInFlightFrameIndex])<>TpvFrustum.COMPLETE_OUT;
-          end;
-         end else begin
-          PotentiallyVisible:=false;
-          for FrustumIndex:=0 to length(aFrustums)-1 do begin
-           if aFrustums[FrustumIndex].AABBInFrustum(InstanceNode.fBoundingBoxes[aInFlightFrameIndex])<>TpvFrustum.COMPLETE_OUT then begin
-            PotentiallyVisible:=true;
-            break;
-           end;
-          end;
-         end;
-        end;
-       end;
-      end;
-
-     end;
-
-     if PotentiallyVisible and
-        (((not assigned(fOnNodeFilter)) or fOnNodeFilter(aInFlightFrameIndex,aRendererInstance,aRenderPass,Group,self,Node,InstanceNode)) and
-         ((not assigned(GroupOnNodeFilter)) or GroupOnNodeFilter(aInFlightFrameIndex,aRendererInstance,aRenderPass,Group,self,Node,InstanceNode)) and
-         ((not assigned(GlobalOnNodeFilter)) or GlobalOnNodeFilter(aInFlightFrameIndex,aRendererInstance,aRenderPass,Group,self,Node,InstanceNode))) then begin
-
-      DrawChoreographyBatchItemIndices:=@Node.fDrawChoreographyBatchItemIndices;
-      for DrawChoreographyBatchItemIndex:=0 to DrawChoreographyBatchItemIndices^.Count-1 do begin
-       DrawChoreographyBatchItemElementIndex:=DrawChoreographyBatchItemIndices^.Items[DrawChoreographyBatchItemIndex];
-       DrawChoreographyBatchItem:=fDrawChoreographyBatchItems[DrawChoreographyBatchItemElementIndex];
-       EffectiveMaterial:=DrawChoreographyBatchItem.fMaterial;
-       if fGroup.fHasLODs and (EffectiveMaterial.fLODMaterialIndices.Count>0) then begin
-        MaterialLODLevel:=InstanceNode.fInFlightFrameActiveLODLevel[aInFlightFrameIndex];
-        if MaterialLODLevel>EffectiveMaterial.fLODMaterialIndices.Count then begin
-         MaterialLODLevel:=EffectiveMaterial.fLODMaterialIndices.Count;
-        end;
-        if (MaterialLODLevel>0) and (EffectiveMaterial.fLODMaterialIndices.ItemArray[MaterialLODLevel-1]>=0) and (EffectiveMaterial.fLODMaterialIndices.ItemArray[MaterialLODLevel-1]<fGroup.fMaterials.Count) then begin
-         EffectiveMaterial:=fGroup.fMaterials[EffectiveMaterial.fLODMaterialIndices.ItemArray[MaterialLODLevel-1]];
-        end;
-       end;
-       if EffectiveMaterial.fVisible and
-          (DrawChoreographyBatchItem.fAlphaMode in aMaterialAlphaModes) and
-          ((not aShadowPass) or (aShadowPass and EffectiveMaterial.fData.CastingShadows and InstanceNode.fInFlightFrameCastingShadows[aInFlightFrameIndex])) and
-         (DrawChoreographyBatchItem.fCountIndices>0) then begin
-        DrawChoreographyBatchItemMaterialAlphaModeBuckets^[DrawChoreographyBatchItem.fAlphaMode,
-                                                           DrawChoreographyBatchItem.fPrimitiveTopology,
-                                                           DoubleSidedFaceCullingModes[DrawChoreographyBatchItem.fDoubleSided,
-                                                                                       InstanceNode.InverseFrontFaces]].Add(DrawChoreographyBatchItem);
-       end;
-      end;
-
-      inc(SkipListItemIndex);
-
+     if SkipListItem^.SkipCount<=0 then begin
+      break;
      end else begin
-
-      if SkipListItem^.SkipCount<=0 then begin
-       break;
-      end else begin
-       inc(SkipListItemIndex,SkipListItem^.SkipCount);
-      end;
-
+      inc(SkipListItemIndex,SkipListItem^.SkipCount);
      end;
 
     end;
@@ -33498,11 +31672,9 @@ begin
 
    PreparePerInFlightFrameRenderInstances(aInFlightFrameIndex,
                                           aRenderPass,
-                                          aViewNodeIndices,
                                           aViewBaseIndex,
                                           aCountViews,
                                           aFrustums,
-                                          aPotentiallyVisibleSetCulling,
                                           FirstInstance,
                                           InstancesCount);
 
@@ -33517,18 +31689,6 @@ begin
 
 end;
 
-{$ifdef DeferredAABBTreeUpdates}
-procedure TpvScene3D.TGroup.TInstance.AddDeferredAABBOperation(const aOperationType:TDeferredAABBOperationType;const aTree:TpvBVHDynamicAABBTree;const aProxy:PpvSizeInt;const aAABB:TpvAABB;const aUserData:TpvPtrInt);
-var Operation:TDeferredAABBOperation;
-begin
- Operation.OperationType:=aOperationType;
- Operation.Tree:=aTree;
- Operation.Proxy:=aProxy;
- Operation.AABB:=aAABB;
- Operation.UserData:=aUserData;
- fDeferredAABBOperations.Enqueue(Operation);
-end;
-{$endif}
 
 {$ifdef DeferredLightAABBTreeUpdates}
 procedure TpvScene3D.TGroup.TInstance.AddDeferredLightOperation(const aOperationType:TDeferredLightOperationType;const aLight:TpvScene3D.TLight);
@@ -33548,6 +31708,9 @@ var NodeIndex,IndicesStart,IndicesCount,InFlightFrameIndex,
     InstanceNode:TpvScene3D.TGroup.TInstance.TNode;
     DrawChoreographyBatchUniqueItem:TpvScene3D.TDrawChoreographyBatchItem;
     CachedVertexRange:TpvScene3D.TCachedVertexRange;
+    CachedBoundsRange:TpvScene3D.TCachedBoundsRange;
+    Node:TpvScene3D.TGroup.TNode;
+    CurrentBoundingSphereIndex:TpvUInt32;
 begin
 
  // Skip for headless and virtual instances
@@ -33631,6 +31794,61 @@ begin
       CachedVertexRange.Count:=IndicesCount;
 
       fGroup.fSceneInstance.fCachedVertexRanges.Add(CachedVertexRange);
+
+     end;
+
+    end;
+
+   end;
+
+   // Build bounds ranges for ALL skinned nodes (dispatched every frame, not just dirty).
+   // This allows ProcessSkinNode removal: cached vertex data persists from last mesh.comp dispatch.
+   DrawChoreographyBatchUniqueItemIndex:=0;
+
+   while DrawChoreographyBatchUniqueItemIndex<CountDrawChoreographyBatchUniqueItems do begin
+
+    DrawChoreographyBatchUniqueItem:=Scene.fDrawChoreographyBatchUniqueItems[DrawChoreographyBatchUniqueItemIndex];
+    inc(DrawChoreographyBatchUniqueItemIndex);
+
+    Node:=TpvScene3D.TGroup.TNode(DrawChoreographyBatchUniqueItem.Node);
+    NodeIndex:=Node.fIndex;
+
+    if assigned(Node.fSkin) then begin
+
+     InstanceNode:=fNodes.RawItems[NodeIndex];
+     CurrentBoundingSphereIndex:=InstanceNode.fBoundingSphereIndex;
+
+     IndicesStart:=DrawChoreographyBatchUniqueItem.fStartIndex;
+     IndicesCount:=DrawChoreographyBatchUniqueItem.fCountIndices;
+
+     // Merge consecutive items with the same BoundingSphereIndex (same skinned node)
+     while DrawChoreographyBatchUniqueItemIndex<CountDrawChoreographyBatchUniqueItems do begin
+
+      DrawChoreographyBatchUniqueItem:=Scene.fDrawChoreographyBatchUniqueItems[DrawChoreographyBatchUniqueItemIndex];
+
+      Node:=TpvScene3D.TGroup.TNode(DrawChoreographyBatchUniqueItem.Node);
+      NodeIndex:=Node.fIndex;
+
+      if assigned(Node.fSkin) and
+         ((IndicesStart+IndicesCount)=DrawChoreographyBatchUniqueItem.fStartIndex) and
+         (fNodes.RawItems[NodeIndex].fBoundingSphereIndex=CurrentBoundingSphereIndex) then begin
+
+       inc(IndicesCount,DrawChoreographyBatchUniqueItem.fCountIndices);
+       inc(DrawChoreographyBatchUniqueItemIndex);
+
+      end else begin
+       break;
+      end;
+
+     end;
+
+     if IndicesCount>0 then begin
+
+      CachedBoundsRange.Offset:=fBufferRanges.VulkanDrawUniqueIndexBufferRange.Offset+IndicesStart;
+      CachedBoundsRange.Count:=IndicesCount;
+      CachedBoundsRange.BoundingSphereIndex:=CurrentBoundingSphereIndex;
+
+      fGroup.fSceneInstance.fCachedBoundsRanges.Add(CachedBoundsRange);
 
      end;
 
@@ -33829,9 +32047,7 @@ begin
  fInstanceTimeMaterialSum:=0.0;
  fInstanceTimeProcessNodesSum:=0.0;
  fInstanceTimeSkinsSum:=0.0;
- fInstanceTimeAABBTreeSum:=0.0;
  fInstanceTimeBoundingSum:=0.0;
- fInstanceTimePotentiallyVisibleSetSum:=0.0;
  fInstanceTimeRenderInstanceSum:=0.0;
 
  fBlueNoise2DTexture:=nil;
@@ -33914,6 +32130,11 @@ begin
 
  fGPUInstanceDataIndexCounter:=1;
 
+ fGPUInstanceDataGeneration:=1;
+ for Index:=0 to fCountInFlightFrames-1 do begin
+  fInFlightFrameGPUInstanceDataGenerations[Index]:=0;
+ end;
+
  fGPUInstanceDataIndexLock:=TPasMPSpinLock.Create;
 
  fInstanceDataListLock:=TPasMPSpinLock.Create;
@@ -33993,6 +32214,7 @@ begin
  fVulkanShortTermDynamicBuffers:=TpvScene3D.TVulkanShortTermDynamicBuffers.Create(self);
 
  fCachedVertexRanges.Initialize;
+ fCachedBoundsRanges.Initialize;
 
  fUseBufferDeviceAddress:=aUseBufferDeviceAddress;
 
@@ -34006,8 +32228,6 @@ begin
  fInitialCountIndices:=fInitialCountVertices div 3;
  fInitialCountMorphTargetVertices:=fInitialCountVertices div 16;
  fInitialCountJointBlocks:=fInitialCountVertices div 16;
-
- fPotentiallyVisibleSet:=TpvScene3D.TPotentiallyVisibleSet.Create;
 
  for Index:=0 to fCountInFlightFrames-1 do begin
   fDebugPrimitiveVertexDynamicArrays[Index]:=TpvScene3D.TDebugPrimitiveVertexDynamicArray.Create;
@@ -34256,7 +32476,7 @@ begin
 
   begin
 
-   Count:=4+IfThen(fRaytracingActive,1,0);
+   Count:=5+IfThen(fRaytracingActive,1,0);
 
    for Index:=0 to fCountInFlightFrames-1 do begin
     fProcessFrameTimerQueries[Index]:=TpvTimerQuery.Create(fVulkanDevice,Count);
@@ -34266,6 +32486,7 @@ begin
    fProcessFrameTimerQueryPlanetSimulationIndex:=-1;
    fProcessFrameTimerQueryAtmosphereSimulationIndex:=-1;
    fProcessFrameTimerQueryMeshComputeIndex:=-1;
+   fProcessFrameTimerQueryMeshBoundsComputeIndex:=-1;
    fProcessFrameTimerQueryUpdateRaytracingIndex:=-1;
 
    fLastProcessFrameTimerQueryResults:=nil;
@@ -34698,9 +32919,13 @@ begin
 
   fMeshCompute:=TpvScene3DMeshCompute.Create(self);
 
+  fMeshBoundsCompute:=TpvScene3DMeshBoundsCompute.Create(self);
+
  end else begin
 
   fMeshCompute:=nil;
+
+  fMeshBoundsCompute:=nil;
 
  end;
 
@@ -34778,16 +33003,6 @@ begin
 
  fDecalDebugFlags:=[];
  fDecalTimeSteps:=false;
-
- fAABBTree:=TpvBVHDynamicAABBTree.Create;
-
- fAABBTreeLock:=TPasMPSlimReaderWriterLock.Create;
-
- for Index:=0 to fCountInFlightFrames-1 do begin
-  fAABBTreeStates[Index].TreeNodes:=nil;
-  fAABBTreeStates[Index].Root:=-1;
-  fAABBTreeStates[Index].Generation:=High(TpvUInt64);
- end;
 
  fOnNodeFilter:=nil;
 
@@ -35149,6 +33364,8 @@ begin
   FreeAndNil(fRaytracingUpdateSimpleParallelJobExecutor);
  end;
 
+ FreeAndNil(fMeshBoundsCompute);
+
  FreeAndNil(fMeshCompute);
 
  for Index:=0 to fFreeQueue.Count-1 do begin
@@ -35190,14 +33407,6 @@ begin
 {for Index:=0 to fCountInFlightFrames-1 do begin
   FreeAndNil(fGlobalVulkanViewUniformStagingBuffers[Index]);
  end;}
-
- for Index:=0 to fCountInFlightFrames-1 do begin
-  fAABBTreeStates[Index].TreeNodes:=nil;
-  fAABBTreeStates[Index].Root:=-1;
-  fAABBTreeStates[Index].Generation:=High(TpvUInt64);
- end;
-
- FreeAndNil(fAABBTree);
 
  for Index:=0 to fCountInFlightFrames-1 do begin
   fLightAABBTreeStates[Index].TreeNodes:=nil;
@@ -35396,8 +33605,6 @@ begin
 
  FreeAndNil(fMaterialDataGenerationLock);
 
- FreeAndNil(fPotentiallyVisibleSet);
-
  if assigned(fVulkanDevice) then begin
   for Index:=0 to fCountInFlightFrames-1 do begin
    FreeAndNil(fInFlightFrameDataTransferQueues[Index]);
@@ -35449,6 +33656,7 @@ begin
  end;
 
  fCachedVertexRanges.Finalize;
+ fCachedBoundsRanges.Finalize;
 
  FreeAndNil(fVulkanVertexBufferRangeAllocator);
 
@@ -35521,8 +33729,6 @@ begin
  FreeAndNil(fRainNormalTexture);
 
  FreeAndNil(fRainStreaksNormalTexture);
-
- FreeAndNil(fAABBTreeLock);
 
  while fLights.Count>0 do begin
   fLights[fLights.Count-1].Free;
@@ -36414,6 +34620,7 @@ begin
  finally
   fGPUInstanceDataIndexLock.Release;
  end;
+ inc(fGPUInstanceDataGeneration);
 end;
 
 procedure TpvScene3D.ReleaseGPUInstanceDataIndex(const aIndex:TpvUInt32);
@@ -36428,6 +34635,7 @@ begin
   finally
    fGPUInstanceDataIndexLock.Release;
   end;
+  inc(fGPUInstanceDataGeneration);
  end;
 end;
 
@@ -37565,6 +35773,9 @@ begin
  if assigned(fMeshCompute) then begin
   TpvScene3DMeshCompute(fMeshCompute).Reset;
  end;
+ if assigned(fMeshBoundsCompute) then begin
+  TpvScene3DMeshBoundsCompute(fMeshBoundsCompute).Reset;
+ end;
 end;
 
 function TpvScene3D.GetLightUserDataIndex(const aUserData:TpvPtrInt):TpvUInt32;
@@ -38069,31 +36280,6 @@ begin
 
 end;
 
-{$ifdef DeferredAABBTreeUpdates}
-procedure TpvScene3D.ProcessDeferredAABBOperations;
-var GroupInstanceIndex:TpvSizeInt;
-    GroupInstance:TpvScene3D.TGroup.TInstance;
-    Operation:TpvScene3D.TGroup.TInstance.TDeferredAABBOperation;
-begin
- for GroupInstanceIndex:=0 to fGroupInstances.Count-1 do begin
-  GroupInstance:=fGroupInstances.RawItems[GroupInstanceIndex];
-  while GroupInstance.fDeferredAABBOperations.Dequeue(Operation) do begin
-   case Operation.OperationType of
-    TpvScene3D.TGroup.TInstance.TDeferredAABBOperationType.Create_:begin
-     Operation.Proxy^:=Operation.Tree.CreateProxy(Operation.AABB,Operation.UserData);
-    end;
-    TpvScene3D.TGroup.TInstance.TDeferredAABBOperationType.Move:begin
-     Operation.Tree.MoveProxy(Operation.Proxy^,Operation.AABB,TpvVector3.Null,TpvVector3.AllAxis,true);
-    end;
-    TpvScene3D.TGroup.TInstance.TDeferredAABBOperationType.Destroy_:begin
-     Operation.Tree.DestroyProxy(Operation.Proxy^);
-     Operation.Proxy^:=-1;
-    end;
-   end;
-  end;
- end;
-end;
-{$endif}
 
 {$ifdef DeferredLightAABBTreeUpdates}
 procedure TpvScene3D.ProcessDeferredLightOperations;
@@ -38157,9 +36343,12 @@ begin
   if fInFlightFrameGPUInstanceDataDynamicArrays[aInFlightFrameIndex].Count<fGPUInstanceDataDynamicArray.Count then begin
    fInFlightFrameGPUInstanceDataDynamicArrays[aInFlightFrameIndex].Resize(fGPUInstanceDataDynamicArray.Count);
   end;
-  Move(fGPUInstanceDataDynamicArray.ItemArray[0],
-       fInFlightFrameGPUInstanceDataDynamicArrays[aInFlightFrameIndex].ItemArray[0],
-       fGPUInstanceDataDynamicArray.Count*SizeOf(TGPUInstanceData));
+  if fInFlightFrameGPUInstanceDataGenerations[aInFlightFrameIndex]<>fGPUInstanceDataGeneration then begin
+   fInFlightFrameGPUInstanceDataGenerations[aInFlightFrameIndex]:=fGPUInstanceDataGeneration;
+   Move(fGPUInstanceDataDynamicArray.ItemArray[0],
+        fInFlightFrameGPUInstanceDataDynamicArrays[aInFlightFrameIndex].ItemArray[0],
+        fGPUInstanceDataDynamicArray.Count*SizeOf(TGPUInstanceData));
+  end;
  end;
 
  if fUpdateCulling.fActive then begin
@@ -38244,9 +36433,7 @@ begin
    fInstanceTimeMaterialSum:=0.0;
    fInstanceTimeProcessNodesSum:=0.0;
    fInstanceTimeSkinsSum:=0.0;
-   fInstanceTimeAABBTreeSum:=0.0;
    fInstanceTimeBoundingSum:=0.0;
-   fInstanceTimePotentiallyVisibleSetSum:=0.0;
    fInstanceTimeRenderInstanceSum:=0.0;
    
    PartStartCPUTime:=pvApplication.HighResolutionTimer.GetTime;
@@ -38267,9 +36454,6 @@ begin
    PartCPUTime:=PartEndCPUTime-PartStartCPUTime;
    fTimeProcessDirectedAcyclicGraph:=pvApplication.HighResolutionTimer.ToFloatSeconds(PartCPUTime)*1000.0; // in ms
 
-{$ifdef DeferredAABBTreeUpdates}
-   ProcessDeferredAABBOperations;
-{$endif}
 
 {$ifdef DeferredLightAABBTreeUpdates}
    ProcessDeferredLightOperations;
@@ -38281,28 +36465,6 @@ begin
 
  finally
   fGroupListLock.Release;
- end;
-
- fAABBTreeLock.Acquire;
- try
-  AABBTreeState:=@fAABBTreeStates[aInFlightFrameIndex];
-//fAABBTree.Rebuild(false);
-  fAABBTree.UpdateGeneration;
-  if AABBTreeState^.Generation<>fAABBTree.Generation then begin
-   AABBTreeState^.Generation:=fAABBTree.Generation;
-   if (length(fAABBTree.Nodes)>0) and (fAABBTree.Root>=0) then begin
-    if length(AABBTreeState^.TreeNodes)<length(fAABBTree.Nodes) then begin
-     AABBTreeState^.TreeNodes:=copy(fAABBTree.Nodes);
-    end else begin
-     Move(fAABBTree.Nodes[0],AABBTreeState^.TreeNodes[0],length(fAABBTree.Nodes)*SizeOf(TpvBVHDynamicAABBTree.TTreeNode));
-    end;
-    AABBTreeState^.Root:=fAABBTree.Root;
-   end else begin
-    AABBTreeState^.Root:=-1;
-   end;
-  end;
- finally
-  fAABBTreeLock.Release;
  end;
 
  begin
@@ -38376,9 +36538,7 @@ begin
  Writeln(' Node Process Time: ',fInstanceTimeProcessNodesSum:7:5,' ms');
  Writeln(' Skin Time: ',fInstanceTimeSkinsSum:7:5,' ms');
  Writeln(' Bounding Time: ',fInstanceTimeBoundingSum:7:5,' ms');
- Writeln(' Potentially Visible Set Time: ',fInstanceTimePotentiallyVisibleSetSum:7:5,' ms');
  Writeln(' Render Instance Time: ',fInstanceTimeRenderInstanceSum:7:5,' ms');
- Writeln(' AABB Tree Time: ',fInstanceTimeAABBTreeSum:7:5,' ms');
 end;
 
 procedure TpvScene3D.CollectLights(var aLightItemArray:TpvScene3D.TLightItems;
@@ -38825,6 +36985,7 @@ begin
   end;
 
   TPasMPInterlocked.Write(fMeshComputeFrameDoneMask,0);
+  TPasMPInterlocked.Write(fMeshBoundsComputeFrameDoneMask,0);
 
   if assigned(fRaytracing) then begin
    fRaytracing.Reset(aInFlightFrameIndex);
@@ -39067,6 +37228,14 @@ begin
    TpvScene3DMeshCompute(fMeshCompute).Execute(CommandBuffer,aInFlightFrameIndex,true);
    fLastProcessFrameCPUTimeValues[fProcessFrameTimerQueryMeshComputeIndex]:=pvApplication.HighResolutionTimer.GetTime-BeginTime;
    fProcessFrameTimerQueries[aInFlightFrameIndex].Stop(fVulkanProcessFrameQueue,CommandBuffer);
+
+   if assigned(fMeshBoundsCompute) then begin
+    fProcessFrameTimerQueryMeshBoundsComputeIndex:=fProcessFrameTimerQueries[aInFlightFrameIndex].Start(fVulkanProcessFrameQueue,CommandBuffer,'Mesh bounds compute');
+    BeginTime:=pvApplication.HighResolutionTimer.GetTime;
+    TpvScene3DMeshBoundsCompute(fMeshBoundsCompute).Execute(CommandBuffer,aInFlightFrameIndex,true);
+    fLastProcessFrameCPUTimeValues[fProcessFrameTimerQueryMeshBoundsComputeIndex]:=pvApplication.HighResolutionTimer.GetTime-BeginTime;
+    fProcessFrameTimerQueries[aInFlightFrameIndex].Stop(fVulkanProcessFrameQueue,CommandBuffer);
+   end;
 
    if fRaytracingActive then begin
 
@@ -39852,164 +38021,10 @@ begin
  end;
 end;
 
-procedure TpvScene3D.CullAndPrepareGroupInstances(const aInFlightFrameIndex:TpvSizeInt;
-                                                  const aRendererInstance:TObject;
-                                                  const aRenderPass:TpvScene3DRendererRenderPass;
-                                                  const aViews:TpvScene3D.TViews;
-                                                  const aViewNodeIndices:TpvScene3D.TPotentiallyVisibleSet.TViewNodeIndices;
-                                                  const aViewBaseIndex:TpvSizeInt;
-                                                  const aCountViews:TpvSizeInt;
-                                                  const aMaterialAlphaModes:TpvScene3D.TMaterial.TAlphaModes;
-                                                  const aPotentiallyVisibleSetCulling:boolean;
-                                                  const aFrustums:TpvFrustumDynamicArray;
-                                                  const aTreeNodes:TpvBVHDynamicAABBTree.TTreeNodes;
-                                                  const aRoot:TpvSizeInt;
-                                                  const aShadowPass:boolean);
-type TStackItem=record
-      NodeIndex:TpvSizeInt;
-      Mask:TpvUInt32;
-     end;
-     PStackItem=^TStackItem;
-     TStack=TpvDynamicFastStack<TStackItem>;
-var Index,ViewIndex,NodeIndex:TpvSizeInt;
-    PotentiallyVisibleSetNodeIndex,
-    ViewPotentiallyVisibleSetNodeIndex:TpvScene3D.TPotentiallyVisibleSet.TNodeIndex;
-    StackItem:TStack.PT;
-    TreeNode:TpvBVHDynamicAABBTree.PTreeNode;
-    Mask:TpvUInt32;
-    Stack:TStack;
-    GroupInstance:TpvScene3D.TGroup.TInstance;
-    PotentiallyVisible:boolean;
-begin
-
- if (aRoot>=0) and (length(aTreeNodes)>0) then begin
-
-  Stack.Initialize;
-  try
-
-   StackItem:=Pointer(Stack.PushIndirect);
-   StackItem^.NodeIndex:=aRoot;
-   StackItem^.Mask:=$ffffffff;
-
-   while Stack.PopIndirect(StackItem) do begin
-
-    NodeIndex:=StackItem^.NodeIndex;
-
-    Mask:=StackItem^.Mask;
-
-    while NodeIndex>=0 do begin
-
-     TreeNode:=@aTreeNodes[NodeIndex];
-
-     if length(aFrustums)>0 then begin
-      if TreeNode^.UserData<>0 then begin
-       GroupInstance:=TpvScene3D.TGroup.TInstance(TreeNode^.UserData);
-       if length(aFrustums)=1 then begin
-        PotentiallyVisible:=(Mask=$40000000) or not ((((Mask and $80000000)<>0) and (aFrustums[0].AABBInFrustum(GroupInstance.fBoundingBoxes[aInFlightFrameIndex],Mask)=TpvFrustum.COMPLETE_OUT)));
-       end else begin
-        PotentiallyVisible:=false;
-        for Index:=0 to length(aFrustums)-1 do begin
-         if aFrustums[Index].AABBInFrustum(GroupInstance.fBoundingBoxes[aInFlightFrameIndex])<>TpvFrustum.COMPLETE_OUT then begin
-          PotentiallyVisible:=true;
-          break;
-         end;
-        end;
-       end;
-      end else begin
-       if length(aFrustums)=1 then begin
-        PotentiallyVisible:=(Mask=$40000000) or not ((((Mask and $80000000)<>0) and (aFrustums[0].AABBInFrustum(TreeNode^.AABB,Mask)=TpvFrustum.COMPLETE_OUT)));
-       end else begin
-        PotentiallyVisible:=false;
-        for Index:=0 to length(aFrustums)-1 do begin
-         if aFrustums[Index].AABBInFrustum(TreeNode^.AABB)<>TpvFrustum.COMPLETE_OUT then begin
-          PotentiallyVisible:=true;
-          break;
-         end;
-        end;
-       end;
-      end;
-     end else begin
-      PotentiallyVisible:=true;
-     end;
-
-     if PotentiallyVisible then begin
-
-      if TreeNode^.UserData<>0 then begin
-
-       GroupInstance:=TpvScene3D.TGroup.TInstance(TreeNode^.UserData);
-
-       // Skip for headless and virtual instances
-       if (not (GroupInstance.fHeadless or GroupInstance.fVirtual)) and GroupInstance.Group.Usable then begin
-
-        if aPotentiallyVisibleSetCulling then begin
-         PotentiallyVisibleSetNodeIndex:=GroupInstance.fPotentiallyVisibleSetNodeIndices[aInFlightFrameIndex];
-         if PotentiallyVisibleSetNodeIndex<>TpvScene3D.TPotentiallyVisibleSet.NoNodeIndex then begin
-          PotentiallyVisible:=false;
-          for ViewIndex:=aViewBaseIndex to (aViewBaseIndex+aCountViews)-1 do begin
-           ViewPotentiallyVisibleSetNodeIndex:=aViewNodeIndices[ViewIndex];
-           if (ViewPotentiallyVisibleSetNodeIndex=TpvScene3D.TPotentiallyVisibleSet.NoNodeIndex) or
-              fPotentiallyVisibleSet.GetNodeVisibility(PotentiallyVisibleSetNodeIndex,ViewPotentiallyVisibleSetNodeIndex) then begin
-            PotentiallyVisible:=true;
-            break;
-           end;
-          end;
-         end;
-        end;
-
-        if PotentiallyVisible then begin
-         GroupInstance.Prepare(aInFlightFrameIndex,
-                               aRendererInstance,
-                               aRenderPass,
-                               aViewNodeIndices,
-                               aViewBaseIndex,
-                               aCountViews,
-                               aFrustums,
-                               aPotentiallyVisibleSetCulling,
-                               aMaterialAlphaModes,
-                               Mask,
-                               aShadowPass);
-        end;
-
-       end;
-
-      end;
-
-      if TreeNode^.Children[0]>=0 then begin
-       if TreeNode^.Children[1]>=0 then begin
-        StackItem:=Stack.PushIndirect;
-        StackItem^.NodeIndex:=TreeNode^.Children[1];
-        StackItem^.Mask:=Mask;
-       end;
-       NodeIndex:=TreeNode^.Children[0];
-       continue;
-      end else begin
-       if TreeNode^.Children[1]>=0 then begin
-        NodeIndex:=TreeNode^.Children[1];
-        continue;
-       end;
-      end;
-
-     end;
-
-     break;
-
-    end;
-
-   end;
-
-  finally
-   Stack.Finalize;
-  end;
-
- end;
-
-end;
-
 procedure TpvScene3D.Prepare(const aInFlightFrameIndex:TpvSizeInt;
                              const aRendererInstance:TObject;
                              const aRenderPass:TpvScene3DRendererRenderPass;
                              const aViews:TpvScene3D.TViews;
-                             const aViewNodeIndices:TpvScene3D.TPotentiallyVisibleSet.TViewNodeIndices;
                              const aViewBaseIndex:TpvSizeInt;
                              const aCountViews:TpvSizeInt;
                              const aViewPortWidth:TpvInt32;
@@ -40017,18 +38032,14 @@ procedure TpvScene3D.Prepare(const aInFlightFrameIndex:TpvSizeInt;
                              const aMainViewPort:Boolean;
                              const aMaterialAlphaModes:TpvScene3D.TMaterial.TAlphaModes;
                              const aFrustumCulling:boolean;
-                             const aPotentiallyVisibleSetCulling:boolean;
                              const aGPUCulling:boolean;
                              const aShadowPass:boolean);
 var Index:TpvSizeInt;
     MaterialAlphaMode:TpvScene3D.TMaterial.TAlphaMode;
     PrimitiveTopology:TpvScene3D.TPrimitiveTopology;
     FaceCullingMode:TpvScene3D.TFaceCullingMode;
-    Frustums:TpvFrustumDynamicArray;
     Group:TpvScene3D.TGroup;
     GroupInstance:TpvScene3D.TGroup.TInstance;
-    AABBTreeState:TpvBVHDynamicAABBTree.PState;
-    View:TpvScene3D.PView;
     DrawChoreographyBatchItems:TDrawChoreographyBatchItems;
     Planet:TpvScene3DPlanet;
     a,b:TpvHighResolutionTime;
@@ -40044,69 +38055,23 @@ begin
 
  if (aViewBaseIndex>=0) and (aCountViews>0) then begin
 
-  Frustums:=nil;
-  try
+  // a:=pvApplication.HighResolutionTimer.GetTime;
 
-// a:=pvApplication.HighResolutionTimer.GetTime;
-
-  if aFrustumCulling or aPotentiallyVisibleSetCulling then begin
-
-   {fAABBTreeLock.Acquire;
-    try}
-
-     AABBTreeState:=@fAABBTreeStates[aInFlightFrameIndex];
-
-     if aFrustumCulling then begin
-      SetLength(Frustums,aCountViews);
-      for Index:=0 to aCountViews-1 do begin
-       View:=@aViews.Items[aViewBaseIndex+Index];
-       Frustums[Index].Init(View^.ViewMatrix,View^.ProjectionMatrix);
-      end;
-     end;
-
-     CullAndPrepareGroupInstances(aInFlightFrameIndex,
-                                  aRendererInstance,
-                                  aRenderPass,
-                                  aViews,
-                                  aViewNodeIndices,
-                                  aViewBaseIndex,
-                                  aCountViews,
-                                  aMaterialAlphaModes,
-                                  aPotentiallyVisibleSetCulling,
-                                  Frustums,
-                                  AABBTreeState^.TreeNodes,
-                                  AABBTreeState^.Root,
-                                  aShadowPass
-                                 );
-
-{   finally
-     fAABBTreeLock.Release;
-    end;}
-
-   end else begin
-
-    for Group in fGroups do begin
-     if Group.Usable and not Group.fHeadless then begin
-      for GroupInstance in Group.fInstances do begin
-       GroupInstance.Prepare(aInFlightFrameIndex,
-                             aRendererInstance,
-                             aRenderPass,
-                             aViewNodeIndices,
-                             aViewBaseIndex,
-                             aCountViews,
-                             Frustums,
-                             aPotentiallyVisibleSetCulling,
-                             aMaterialAlphaModes,
-                             TpvUInt32($ffffffff),
-                             aShadowPass);
-      end;
-     end;
+  // GPU-driven: always flat iteration, no CPU-side CullAndPrepareGroupInstances
+  for Group in fGroups do begin
+   if Group.Usable and not Group.fHeadless then begin
+    for GroupInstance in Group.fInstances do begin
+     GroupInstance.Prepare(aInFlightFrameIndex,
+                           aRendererInstance,
+                           aRenderPass,
+                           aViewBaseIndex,
+                           aCountViews,
+                           nil,
+                           aMaterialAlphaModes,
+                           TpvUInt32($ffffffff),
+                           aShadowPass);
     end;
-
    end;
-
-  finally
-   Frustums:=nil;
   end;
 
 { b:=pvApplication.HighResolutionTimer.GetTime;
@@ -40204,6 +38169,7 @@ var Index,OtherIndex,Count:TpvSizeInt;
 begin
 
  fCachedVertexRanges.Count:=0;
+ fCachedBoundsRanges.Count:=0;
 
  for Group in fGroups do begin
   if Group.Usable then begin
@@ -40336,6 +38302,68 @@ begin
   end;
 
  end;
+end;
+
+procedure TpvScene3D.DispatchCachedBounds(const aInFlightFrameIndex:TpvSizeInt;
+                                          const aCommandBuffer:TpvVulkanCommandBuffer;
+                                          const aPipelineLayout:TpvVulkanPipelineLayout);
+var Index:TpvSizeInt;
+    Current:PCachedBoundsRange;
+    MeshBoundsComputePushConstants:TpvScene3D.TMeshBoundsComputePushConstants;
+begin
+
+ if fCachedBoundsRanges.Count>0 then begin
+
+  aCommandBuffer.CmdBindDescriptorSets(VK_PIPELINE_BIND_POINT_COMPUTE,
+                                       aPipelineLayout.Handle,
+                                       0,
+                                       1,
+                                       @fVulkanLongTermStaticBuffers.fBufferDataArray[fVulkanLongTermStaticBuffers.fCurrentIndex].fVulkanComputeDescriptorSet.Handle,
+                                       0,
+                                       nil);
+
+  aCommandBuffer.CmdBindDescriptorSets(VK_PIPELINE_BIND_POINT_COMPUTE,
+                                       aPipelineLayout.Handle,
+                                       1,
+                                       1,
+                                       @fVulkanShortTermDynamicBuffers.fBufferDataArray[aInFlightFrameIndex].fVulkanComputeDescriptorSet.Handle,
+                                       0,
+                                       nil);
+
+  aCommandBuffer.CmdBindDescriptorSets(VK_PIPELINE_BIND_POINT_COMPUTE,
+                                       aPipelineLayout.Handle,
+                                       2,
+                                       1,
+                                       @fGlobalBoundingSphereVulkanDescriptorSets[aInFlightFrameIndex].Handle,
+                                       0,
+                                       nil);
+
+  for Index:=0 to fCachedBoundsRanges.Count-1 do begin
+
+   Current:=@fCachedBoundsRanges.Items[Index];
+
+   MeshBoundsComputePushConstants.IndexOffset:=Current^.Offset;
+   MeshBoundsComputePushConstants.CountIndices:=Current^.Count;
+   MeshBoundsComputePushConstants.BoundingSphereIndex:=Current^.BoundingSphereIndex;
+
+   aCommandBuffer.CmdPushConstants(aPipelineLayout.Handle,
+                                   TVkShaderStageFlags(TVkShaderStageFlagBits.VK_SHADER_STAGE_COMPUTE_BIT),
+                                   0,
+                                   SizeOf(TpvScene3D.TMeshBoundsComputePushConstants),
+                                   @MeshBoundsComputePushConstants);
+
+   if assigned(fVulkanDevice) and assigned(fVulkanDevice.BreadcrumbBuffer) then begin
+    fVulkanDevice.BreadcrumbBuffer.BeginBreadcrumb(aCommandBuffer.Handle,TpvVulkanBreadcrumbType.Dispatch,'MeshBoundsComputeStage');
+   end;
+   aCommandBuffer.CmdDispatch(1,1,1);
+   if assigned(fVulkanDevice) and assigned(fVulkanDevice.BreadcrumbBuffer) then begin
+    fVulkanDevice.BreadcrumbBuffer.EndBreadcrumb(aCommandBuffer.Handle);
+   end;
+
+  end;
+
+ end;
+
 end;
 
 procedure TpvScene3D.UpdatePlanetBufRefArray(const aCommandBuffer:TpvVulkanCommandBuffer;
@@ -40760,7 +38788,8 @@ procedure TpvScene3D.Draw(const aRendererInstance:TObject;
                           const aOnSetRenderPassResources:TpvScene3D.TOnSetRenderPassResources;
                           const aMaterialAlphaModes:TpvScene3D.TMaterial.TAlphaModes;
                           const aJitter:PpvVector4;
-                          const aDisocclusions:Boolean);
+                          const aDisocclusions:Boolean;
+                          const aOITPromotion:Boolean);
 begin
 
  if aMaterialAlphaModes=[TpvScene3D.TMaterial.TAlphaMode.Blend] then begin
@@ -40793,7 +38822,8 @@ begin
                                                            aPipelineLayout,
                                                            aOnSetRenderPassResources,
                                                            aJitter,
-                                                           aDisocclusions);
+                                                           aDisocclusions,
+                                                           aOITPromotion);
 
   fVulkanDevice.DebugUtils.CmdBufLabelEnd(aCommandBuffer);
 end;
@@ -41969,35 +39999,8 @@ begin
 
    if VirtualInstance.Active then begin
 
-    if (aInFlightFrameIndex>=0) and fSceneInstance.fUpdateCulling.fActive then begin
-     if VirtualInstance.UseRenderInstances then begin
-      Visible:=false;
-      for RenderInstanceIndex:=0 to VirtualInstance.fRenderInstances.Count-1 do begin
-       RenderInstance:=VirtualInstance.fRenderInstances.RawItems[RenderInstanceIndex];
-       if RenderInstance.fActive then begin
-        if VirtualInstance.fBoundingRadius>0.0 then begin
-         if fSceneInstance.fUpdateCulling.Check(RenderInstance.ModelMatrix,VirtualInstance.fBoundingRadius) then begin
-          Visible:=true;
-          break;
-         end;
-        end else begin
-         if fSceneInstance.fUpdateCulling.Check(RenderInstance.ModelMatrix,VirtualInstance.fBoundingSpheres[aInFlightFrameIndex].Radius) then begin
-          Visible:=true;
-          break;
-         end;
-        end;
-       end;
-      end;
-     end else begin
-      if VirtualInstance.fBoundingRadius>0.0 then begin
-       Visible:=fSceneInstance.fUpdateCulling.Check(VirtualInstance.ModelMatrix,VirtualInstance.fBoundingRadius);
-      end else begin
-       Visible:=fSceneInstance.fUpdateCulling.Check(VirtualInstance.ModelMatrix,VirtualInstance.fBoundingSpheres[aInFlightFrameIndex].Radius);
-      end;
-     end;
-    end else begin
-     Visible:=true; // If no frustums, all visible
-    end;
+    // GPU-driven: no CPU frustum culling for virtual instances
+    Visible:=true;
 
     if Visible then begin
 

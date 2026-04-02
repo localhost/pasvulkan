@@ -30,15 +30,38 @@ struct DrawIndexedIndirectCommand {
   uvec4 cmd1; // firstInstance_objectIndex_boundingSphereIndex_flags; // x = firstInstance, y = objectIndex, z = boundingSphereIndex, w = flags
 }; // 32 bytes per draw indexed indirect command, dividable by 32 bytes for better GPU cache line alignment 
 
+struct BatchRange {
+  uint baseCommandIndex;
+  uint countCommands;
+  uint drawCallIndex;
+  uint baseCommandIndexForDisocclusions;
+  uint drawCallIndexForDisocclusions;
+  uint alphaMode;
+  uint oitDrawCallIndex;
+  uint oitBaseCommandIndex;
+};
+
+struct InstanceData { 
+  uvec4 SelectedDissolveDitheredTransparencyFlags;
+  vec4 SelectedColorIntensity;
+  vec4 DissolveColor0Scale;
+  vec4 DissolveColor1Width;  
+  uvec4 colorKeysRG;
+  uvec4 colorKeysBA;
+  uvec4 unused0;
+  uvec4 unused1;
+};
+
 #if PASS == 0
 
 layout(push_constant) uniform PushConstants {
-  uint baseDrawIndexedIndirectCommandIndex;
-  uint countDrawIndexedIndirectCommands;
-  uint drawCallIndex;
+  uint countRanges;
+  uint totalCommands;
   uint countObjectIndices;
   uint skipCulling; // 1u if it is the first frame, if there are sudden complete new views, or if the objectIndices are not valid anymore, 0u otherwise
-  uint visibilityBufferOffset;  
+  uint batchRangeOffset;  // offset into BatchRanges array for this CullRenderPass
+  uint prefixSumOffset;   // offset into PrefixSums array for this CullRenderPass
+  uint visibilityBufferOffset; // per-pass constant, differs between pass 0 and pass 1
 } pushConstants;
 
 layout(set = 0, binding = 0, std430) buffer InputDrawIndexedIndirectCommands {
@@ -57,20 +80,38 @@ layout(set = 0, binding = 3, std430) buffer OutputDrawIndexedIndirectCommandCoun
   uint counts[];
 } outputDrawIndexedIndirectCommandCounts;
 
+layout(set = 0, binding = 4, std430) readonly buffer BatchRangesBuffer {
+  BatchRange ranges[];
+} batchRanges;
+
+layout(set = 0, binding = 5, std430) readonly buffer PrefixSumsBuffer {
+  uint sums[];
+} prefixSums;
+
+// Global descriptor set for DrawInfo + InstanceData access
+#include "drawinfo.glsl"
+
+layout(set = 1, binding = 0, std430) readonly buffer DrawInfoBuffer {
+  DrawInfo drawInfoItems[];
+};
+
+layout(set = 1, binding = 6, std430) readonly buffer InstanceDataBuffer {
+  InstanceData instanceDataItems[];
+};
+
 #else // PASS == 1
 
 layout(push_constant) uniform PushConstants {
-  uint baseDrawIndexedIndirectCommandIndex;
-  uint countDrawIndexedIndirectCommands;
-  uint drawCallIndex;
+  uint countRanges;
+  uint totalCommands;
   uint countObjectIndices;
   uint skipCulling; // 1u if it is the first frame, if there are sudden complete new views, or if the objectIndices are not valid anymore, 0u otherwise
-  uint visibilityBufferOffset;  
+  uint batchRangeOffset;  // offset into BatchRanges array for this CullRenderPass
+  uint prefixSumOffset;   // offset into PrefixSums array for this CullRenderPass
+  uint visibilityBufferOffset; // per-pass constant, differs between pass 0 and pass 1
   uint textureDepthIndex;
   uint baseViewIndex;
   uint countViews;
-  uint baseDrawIndexedIndirectCommandIndexForDisocclusions;
-  uint drawCallIndexForDisocclusions;
 } pushConstants;
 
 struct View {
@@ -102,11 +143,23 @@ layout(set = 0, binding = 4, std430) buffer OutputVisiblityBuffer {
 
 layout(set = 0, binding = 5) uniform sampler2DArray uTextureDepths[];
 
+layout(set = 0, binding = 6, std430) readonly buffer BatchRangesBuffer {
+  BatchRange ranges[];
+} batchRanges;
+
+layout(set = 0, binding = 7, std430) readonly buffer PrefixSumsBuffer {
+  uint sums[];
+} prefixSums;
+
 // Global descriptor set
 #include "drawinfo.glsl"
 
 layout(set = 1, binding = 0, std430) readonly buffer DrawInfoBuffer {
   DrawInfo drawInfoItems[];
+};
+
+layout(set = 1, binding = 6, std430) readonly buffer InstanceDataBuffer {
+  InstanceData instanceDataItems[];
 };
 
 // Bounding sphere descriptor set
@@ -142,23 +195,44 @@ shared Frustum frustums[8];
 
 #endif
 
+// Binary search: find the batch range index for a given global invocation index
+// prefixSums.sums[i] contains the cumulative command count up to (but not including) range i
+// prefixSums.sums[countRanges] = totalCommands
+uint findRangeIndex(uint globalIndex){
+  uint lo = 0u;
+  uint hi = pushConstants.countRanges;
+  [[unroll_hint(16)]]
+  while(lo < hi){
+    uint mid = (lo + hi) >> 1u;
+    if(prefixSums.sums[pushConstants.prefixSumOffset + mid + 1u] <= globalIndex){
+      lo = mid + 1u;
+    } else {
+      hi = mid;
+    }
+  }
+  return lo;
+}
+
 void main(){
 
 #if PASS == 0
 
   // In the first pass, just draw the previous frame visible stuff as against-cull-data (HiZ depth buffer) for the next pass
-  // The previous drawIndexedIndirectCommands can't be reused directly here in this everything-in-a-single-round-trip
-  // implementation, since as there is the possibility of no more existing objects, different data offsets and so on. Therefore 
-  // this first pass is needed, otherwise it would be possible that it breaks, On the other hand, the object indices are temporally 
-  // stable, so they can be reused from the previous frame for the starting point HiZ depth buffer.
 
-  uint invocationIndex = gl_GlobalInvocationID.x;
+  uint globalIndex = gl_GlobalInvocationID.x;
 
-  if(invocationIndex >= pushConstants.countDrawIndexedIndirectCommands){
+  if(globalIndex >= pushConstants.totalCommands){
     return;  
   }
 
-  uint sourceIndex = pushConstants.baseDrawIndexedIndirectCommandIndex + invocationIndex;
+  uint rangeIndex = findRangeIndex(globalIndex);
+  uint localIndex = globalIndex - prefixSums.sums[pushConstants.prefixSumOffset + rangeIndex];
+
+  uint baseCommandIndex = batchRanges.ranges[pushConstants.batchRangeOffset + rangeIndex].baseCommandIndex;
+  uint drawCallIndex = batchRanges.ranges[pushConstants.batchRangeOffset + rangeIndex].drawCallIndex;
+  uint visibilityBufferOffset = pushConstants.visibilityBufferOffset;
+
+  uint sourceIndex = baseCommandIndex + localIndex;
 
   const uvec4 cmd0 = inputDrawIndexedIndirectCommands.commands[sourceIndex].cmd0;
   uvec4 cmd1 = inputDrawIndexedIndirectCommands.commands[sourceIndex].cmd1;
@@ -168,20 +242,40 @@ void main(){
                                                      // new drawIndexedIndirectCommands may have been added 
                                                      // with a higher object index than the current 
                                                      // countObjectIndices in contrast to the previous frame
-      ((inputVisibilityBuffer.bitmap[pushConstants.visibilityBufferOffset + (cmd1.y >> 5u)] & (1u << (cmd1.y & 31u))) == 0u))){
+      ((inputVisibilityBuffer.bitmap[visibilityBufferOffset + (cmd1.y >> 5u)] & (1u << (cmd1.y & 31u))) == 0u))){
     // Skip, since it was not visible in the previous frame    
     return; 
   }
 
-  if(((cmd1.w & 2u) | cmd0.w) != 0u){
-    // It has instance effects, so it is not a candidate for HiZ depth buffer culling, since it can have holes in the depth buffer through the
-    // instance effects, so just pass it through to the next pass as non-added, so that the next pass can handle it properly.
+  {
+    // Check for instance effects (dissolve/dithered transparency) by reading directly from InstanceData SSBO
+    // instead of relying on CPU-baked flags. This allows the commands to be persistent/cached.
+    uint instanceDataIndex = drawInfoItems[cmd1.y].instanceDataIndex;
+    if(instanceDataIndex > 0u){
+      float dissolve = uintBitsToFloat(instanceDataItems[instanceDataIndex].SelectedDissolveDitheredTransparencyFlags.y);
+      float ditheredTransparency = uintBitsToFloat(instanceDataItems[instanceDataIndex].SelectedDissolveDitheredTransparencyFlags.z);
+      if((dissolve > 1e-4) || (ditheredTransparency > 1e-4)){
+        // Route to OIT instead of opaque output for smooth alpha rendering
+        uint oitDrawCallIndex = batchRanges.ranges[pushConstants.batchRangeOffset + rangeIndex].oitDrawCallIndex;
+        if(oitDrawCallIndex != 0xffffffffu){
+          uint oitBaseCommandIndex = batchRanges.ranges[pushConstants.batchRangeOffset + rangeIndex].oitBaseCommandIndex;
+          uint destIdx = oitBaseCommandIndex + atomicAdd(outputDrawIndexedIndirectCommandCounts.counts[oitDrawCallIndex], 1u);
+          outputDrawIndexedIndirectCommands.commands[destIdx].cmd0 = cmd0;
+          outputDrawIndexedIndirectCommands.commands[destIdx].cmd1 = cmd1;
+        }
+        return;
+      }
+    }
+  }
+
+  if(cmd0.w != 0u){
+    // It has vertex offset, so it is not a candidate for HiZ depth buffer culling
     return;
   }
-  
+
   inputDrawIndexedIndirectCommands.commands[sourceIndex].cmd1.w = (cmd1.w |= 1u); // Mark as added
 
-  uint destinationIndex = pushConstants.baseDrawIndexedIndirectCommandIndex + atomicAdd(outputDrawIndexedIndirectCommandCounts.counts[pushConstants.drawCallIndex], 1u);
+  uint destinationIndex = baseCommandIndex + atomicAdd(outputDrawIndexedIndirectCommandCounts.counts[drawCallIndex], 1u);
   
   outputDrawIndexedIndirectCommands.commands[destinationIndex].cmd0 = cmd0;
   outputDrawIndexedIndirectCommands.commands[destinationIndex].cmd1 = cmd1;
@@ -223,13 +317,22 @@ void main(){
   groupMemoryBarrier();
   barrier(); 
 
-  uint invocationIndex = gl_GlobalInvocationID.x;
+  uint globalIndex = gl_GlobalInvocationID.x;
 
-  if(invocationIndex >= pushConstants.countDrawIndexedIndirectCommands){
+  if(globalIndex >= pushConstants.totalCommands){
     return;  
   }
 
-  uint sourceIndex = pushConstants.baseDrawIndexedIndirectCommandIndex + invocationIndex;
+  uint rangeIndex = findRangeIndex(globalIndex);
+  uint localIndex = globalIndex - prefixSums.sums[pushConstants.prefixSumOffset + rangeIndex];
+
+  uint baseCommandIndex = batchRanges.ranges[pushConstants.batchRangeOffset + rangeIndex].baseCommandIndex;
+  uint drawCallIndex = batchRanges.ranges[pushConstants.batchRangeOffset + rangeIndex].drawCallIndex;
+  uint visibilityBufferOffset = pushConstants.visibilityBufferOffset;
+  uint baseCommandIndexForDisocclusions = batchRanges.ranges[pushConstants.batchRangeOffset + rangeIndex].baseCommandIndexForDisocclusions;
+  uint drawCallIndexForDisocclusions = batchRanges.ranges[pushConstants.batchRangeOffset + rangeIndex].drawCallIndexForDisocclusions;
+
+  uint sourceIndex = baseCommandIndex + localIndex;
 
   bool isDrawIndexedIndirectCommandVisible = false;
 
@@ -325,13 +428,42 @@ void main(){
   const uint objectIndex = cmd1.y;
   
   // Mark as visible in any case, independently of being already added in the previous pass 
-  atomicOr(outputVisiblityBuffer.bitmap[pushConstants.visibilityBufferOffset + (cmd1.y >> 5u)], 1u << (cmd1.y & 31u)); 
+  atomicOr(outputVisiblityBuffer.bitmap[visibilityBufferOffset + (cmd1.y >> 5u)], 1u << (cmd1.y & 31u)); 
+
+  // Check for instance effects (dissolve/dithered transparency) and route to OIT if needed
+  {
+    uint instanceDataIndex = drawInfoItems[cmd1.y].instanceDataIndex;
+    if(instanceDataIndex > 0u){
+      float dissolve = uintBitsToFloat(instanceDataItems[instanceDataIndex].SelectedDissolveDitheredTransparencyFlags.y);
+      float ditheredTransparency = uintBitsToFloat(instanceDataItems[instanceDataIndex].SelectedDissolveDitheredTransparencyFlags.z);
+      if((dissolve > 1e-4) || (ditheredTransparency > 1e-4)){
+        uint oitDrawCallIndex = batchRanges.ranges[pushConstants.batchRangeOffset + rangeIndex].oitDrawCallIndex;
+        if(oitDrawCallIndex != 0xffffffffu){
+          // Route to OIT normal output
+          uint oitBaseCommandIndex = batchRanges.ranges[pushConstants.batchRangeOffset + rangeIndex].oitBaseCommandIndex;
+          uint destIdx = oitBaseCommandIndex + atomicAdd(outputDrawIndexedIndirectCommandCounts.counts[oitDrawCallIndex], 1u);
+          outputDrawIndexedIndirectCommands.commands[destIdx].cmd0 = cmd0;
+          outputDrawIndexedIndirectCommands.commands[destIdx].cmd1 = cmd1;
+          // Route to OIT disocclusion output
+          if(((cmd1.w & 1u) == 0u) &&
+             (baseCommandIndexForDisocclusions != 0xffffffffu)){
+            uint oitDisocDrawCallIndex = oitDrawCallIndex + (drawCallIndexForDisocclusions - drawCallIndex);
+            uint oitDisocBaseCommandIndex = oitBaseCommandIndex + (baseCommandIndexForDisocclusions - baseCommandIndex);
+            uint destIdx2 = oitDisocBaseCommandIndex + atomicAdd(outputDrawIndexedIndirectCommandCounts.counts[oitDisocDrawCallIndex], 1u);
+            outputDrawIndexedIndirectCommands.commands[destIdx2].cmd0 = cmd0;
+            outputDrawIndexedIndirectCommands.commands[destIdx2].cmd1 = cmd1;
+          }
+        }
+        return;
+      }
+    }
+  }
 
   // Append to the global part of the output buffer to ensure the forward+ pass renders all visible elements as much as possible, so that false positive 
   // occlusion culls are avoided as much as possible.
   {
 
-    uint destinationIndex = pushConstants.baseDrawIndexedIndirectCommandIndex + atomicAdd(outputDrawIndexedIndirectCommandCounts.counts[pushConstants.drawCallIndex], 1u);
+    uint destinationIndex = baseCommandIndex + atomicAdd(outputDrawIndexedIndirectCommandCounts.counts[drawCallIndex], 1u);
     
     // Copy the command data to the output buffer
     outputDrawIndexedIndirectCommands.commands[destinationIndex].cmd0 = cmd0;
@@ -341,10 +473,10 @@ void main(){
 
   // Manage disocclusion in the output buffer. This step helps optimize depth pre-pass by minimizing depth-buffer overdraw and avoiding redundant rendering 
   // in the depth buffer. This is necessary because a complete depth pre-pass is needed for things like e.g. screen space ambient occlusion and the like.
-  if(((cmd1.w & 1u) == 0u) &&                                                             // Just when not already added in the previous pass to the global output buffer part
-     (pushConstants.baseDrawIndexedIndirectCommandIndexForDisocclusions != 0xffffffffu)){ // Just when enabled
+  if(((cmd1.w & 1u) == 0u) &&                                        // Just when not already added in the previous pass to the global output buffer part
+     (baseCommandIndexForDisocclusions != 0xffffffffu)){ // Just when enabled
 
-    uint destinationIndex = pushConstants.baseDrawIndexedIndirectCommandIndexForDisocclusions + atomicAdd(outputDrawIndexedIndirectCommandCounts.counts[pushConstants.drawCallIndexForDisocclusions], 1u);
+    uint destinationIndex = baseCommandIndexForDisocclusions + atomicAdd(outputDrawIndexedIndirectCommandCounts.counts[drawCallIndexForDisocclusions], 1u);
     
     // Copy the command data to the output buffer
     outputDrawIndexedIndirectCommands.commands[destinationIndex].cmd0 = cmd0;

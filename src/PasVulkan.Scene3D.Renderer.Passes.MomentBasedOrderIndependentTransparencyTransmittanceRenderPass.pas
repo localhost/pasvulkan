@@ -914,6 +914,23 @@ begin
                                   [TpvScene3D.TMaterial.TAlphaMode.Blend],
                                   @InFlightFrameState^.Jitter);
 
+  // OIT-promoted Opaque/Mask instances (dissolve/dither routed to OIT by GPU)
+  fInstance.Renderer.Scene3D.Draw(fInstance,
+                                  fVulkanGraphicsPipelines[TpvScene3D.TMaterial.TAlphaMode.Blend],
+                                  -1,
+                                  aInFlightFrameIndex,
+                                  TpvScene3DRendererRenderPass.View,
+                                  InFlightFrameState^.FinalViewIndex,
+                                  InFlightFrameState^.CountFinalViews,
+                                  FrameGraph.DrawFrameIndex,
+                                  aCommandBuffer,
+                                  fVulkanPipelineLayout,
+                                  OnSetRenderPassResources,
+                                  [TpvScene3D.TMaterial.TAlphaMode.Opaque,TpvScene3D.TMaterial.TAlphaMode.Mask],
+                                  @InFlightFrameState^.Jitter,
+                                  false,
+                                  true);
+
   fInstance.Renderer.Scene3D.DrawParticles(fInstance,
                                            fVulkanParticleGraphicsPipeline,
                                            -1,

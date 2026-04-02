@@ -81,19 +81,26 @@ type { TpvScene3DRendererPassesMeshCullPass1ComputePass }
      TpvScene3DRendererPassesMeshCullPass1ComputePass=class(TpvFrameGraph.TComputePass)
       public
        type TPushConstants=packed record
-             BaseDrawIndexedIndirectCommandIndex:TpvUInt32;
-             CountDrawIndexedIndirectCommands:TpvUInt32;
-             DrawCallIndex:TpvUInt32;
+             CountRanges:TpvUInt32;
+             TotalCommands:TpvUInt32;
              CountObjectIndices:TpvUInt32;
              SkipCulling:TpvUInt32;
+             BatchRangeOffset:TpvUInt32;
+             PrefixSumOffset:TpvUInt32;
              VisibilityBufferOffset:TpvUInt32;
              TextureDepthIndex:TpvUInt32;
              BaseViewIndex:TpvUInt32;
              CountViews:TpvUInt32;
-             BaseDrawIndexedIndirectCommandIndexForDisocclusions:TpvUInt32;
-             DrawCallIndexForDisocclusions:TpvUInt32;
             end;
             PPushConstants=^TPushConstants;
+            TMeshCullResetPushConstants=packed record
+             CountRanges:TpvUInt32;
+             MaxMultiIndirectDrawCalls:TpvUInt32;
+             BatchRangeOffset:TpvUInt32;
+             PrefixSumOffset:TpvUInt32;
+             CullDispatchIndex:TpvUInt32;
+            end;
+            PMeshCullResetPushConstants=^TMeshCullResetPushConstants;
       private
        fInstance:TpvScene3DRendererInstance;
        fCullRenderPass:TpvScene3DRendererCullRenderPass;
@@ -220,17 +227,14 @@ end;
 
 procedure TpvScene3DRendererPassesMeshCullPass1ComputePass.Execute(const aCommandBuffer:TpvVulkanCommandBuffer;const aInFlightFrameIndex,aFrameIndex:TpvSizeInt);
 var RenderPass:TpvScene3DRendererRenderPass;
-    DrawChoreographyBatchRangeIndex,
-    FirstDrawCallIndex,
-    CountDrawCallIndices,
     Part:TpvSizeInt;
-    DrawChoreographyBatchRangeDynamicArray:TpvScene3D.PDrawChoreographyBatchRangeDynamicArray;
-    DrawChoreographyBatchRangeIndexDynamicArray:TpvScene3D.PDrawChoreographyBatchRangeIndexDynamicArray;
-    DrawChoreographyBatchRange:TpvScene3D.PDrawChoreographyBatchRange;
     BufferMemoryBarriers:array[0..3] of TVkBufferMemoryBarrier;
     PushConstants:TpvScene3DRendererPassesMeshCullPass1ComputePass.TPushConstants;
+    ResetPushConstants:TMeshCullResetPushConstants;
     DescriptorSets:array[0..2] of TVkDescriptorSet;
+    CountRanges,TotalCommands:TpvUInt32;
 begin
+
  inherited Execute(aCommandBuffer,aInFlightFrameIndex,aFrameIndex);
 
  case fCullRenderPass of
@@ -278,7 +282,7 @@ begin
                                                          VK_WHOLE_SIZE);
 
   BufferMemoryBarriers[3]:=TVkBufferMemoryBarrier.Create(TVkAccessFlags(VK_ACCESS_INDIRECT_COMMAND_READ_BIT) or TVkAccessFlags(VK_ACCESS_SHADER_READ_BIT),
-                                                         TVkAccessFlags(VK_ACCESS_TRANSFER_WRITE_BIT),
+                                                         TVkAccessFlags(VK_ACCESS_SHADER_WRITE_BIT),
                                                          VK_QUEUE_FAMILY_IGNORED,
                                                          VK_QUEUE_FAMILY_IGNORED,
                                                          fInstance.PerInFlightFrameGPUDrawIndexedIndirectCommandCounterBuffers[aInFlightFrameIndex].Handle,
@@ -297,81 +301,46 @@ begin
 
   if fInstance.PerInFlightFrameGPUCulledArray[aInFlightFrameIndex,RenderPass] then begin
 
-   FirstDrawCallIndex:=0;
-   CountDrawCallIndices:=0;
+   CountRanges:=fInstance.PerInFlightFrameMeshCullBatchRangeCounts[aInFlightFrameIndex,fCullRenderPass];
+   TotalCommands:=fInstance.PerInFlightFrameMeshCullTotalCommands[aInFlightFrameIndex,fCullRenderPass];
 
-   DrawChoreographyBatchRangeDynamicArray:=@fInstance.DrawChoreographyBatchRangeFrameBuckets[aInFlightFrameIndex];
+   if (CountRanges>0) and (TotalCommands>0) then begin
 
-   DrawChoreographyBatchRangeIndexDynamicArray:=@fInstance.DrawChoreographyBatchRangeFrameRenderPassBuckets[aInFlightFrameIndex,RenderPass];
+    aCommandBuffer.CmdBindPipeline(VK_PIPELINE_BIND_POINT_COMPUTE,fInstance.MeshCullReset.Pipeline.Handle);
 
-   for DrawChoreographyBatchRangeIndex:=0 to DrawChoreographyBatchRangeIndexDynamicArray^.Count-1 do begin
+    DescriptorSets[0]:=fInstance.MeshCullReset.VulkanDescriptorSets[aInFlightFrameIndex].Handle;
 
-    DrawChoreographyBatchRange:=@DrawChoreographyBatchRangeDynamicArray^.Items[DrawChoreographyBatchRangeIndexDynamicArray^.Items[DrawChoreographyBatchRangeIndex]];
+    aCommandBuffer.CmdBindDescriptorSets(VK_PIPELINE_BIND_POINT_COMPUTE,
+                                         fInstance.MeshCullReset.PipelineLayout.Handle,
+                                         0,
+                                         1,
+                                         @DescriptorSets[0],
+                                         0,
+                                         nil);
 
-    if DrawChoreographyBatchRange^.CountCommands>0 then begin
+    ResetPushConstants.CountRanges:=CountRanges;
+    ResetPushConstants.MaxMultiIndirectDrawCalls:=TpvScene3DRendererInstance.MaxMultiIndirectDrawCalls;
+    ResetPushConstants.BatchRangeOffset:=fInstance.PerInFlightFrameMeshCullBatchRangeOffsets[aInFlightFrameIndex,fCullRenderPass];
+    ResetPushConstants.PrefixSumOffset:=fInstance.PerInFlightFrameMeshCullPrefixSumOffsets[aInFlightFrameIndex,fCullRenderPass];
+    ResetPushConstants.CullDispatchIndex:=TpvUInt32(Part);
 
-     if (CountDrawCallIndices=0) or ((FirstDrawCallIndex+CountDrawCallIndices)<>DrawChoreographyBatchRange^.DrawCallIndex) then begin
-      if CountDrawCallIndices>0 then begin
-       if assigned(fInstance.Renderer.VulkanDevice.BreadcrumbBuffer) then begin
-        fInstance.Renderer.VulkanDevice.BreadcrumbBuffer.BeginBreadcrumb(aCommandBuffer.Handle,TpvVulkanBreadcrumbType.FillBuffer,'MeshCullPass1ComputePass.FillCounter1');
-       end;
-       aCommandBuffer.CmdFillBuffer(fInstance.PerInFlightFrameGPUDrawIndexedIndirectCommandCounterBuffers[aInFlightFrameIndex].Handle,
-                                    FirstDrawCallIndex*SizeOf(TVkUInt32),
-                                    CountDrawCallIndices*SizeOf(TVkUInt32),
-                                    0);
-       if assigned(fInstance.Renderer.VulkanDevice.BreadcrumbBuffer) then begin
-        fInstance.Renderer.VulkanDevice.BreadcrumbBuffer.EndBreadcrumb(aCommandBuffer.Handle);
-       end;
-       if assigned(fInstance.Renderer.VulkanDevice.BreadcrumbBuffer) then begin
-        fInstance.Renderer.VulkanDevice.BreadcrumbBuffer.BeginBreadcrumb(aCommandBuffer.Handle,TpvVulkanBreadcrumbType.FillBuffer,'MeshCullPass1ComputePass.FillCounter2');
-       end;
-       aCommandBuffer.CmdFillBuffer(fInstance.PerInFlightFrameGPUDrawIndexedIndirectCommandCounterBuffers[aInFlightFrameIndex].Handle,
-                                    (TpvScene3DRendererInstance.MaxMultiIndirectDrawCalls+FirstDrawCallIndex)*SizeOf(TVkUInt32),
-                                    CountDrawCallIndices*SizeOf(TVkUInt32),
-                                    0);
-       if assigned(fInstance.Renderer.VulkanDevice.BreadcrumbBuffer) then begin
-        fInstance.Renderer.VulkanDevice.BreadcrumbBuffer.EndBreadcrumb(aCommandBuffer.Handle);
-       end;
-      end;
-      FirstDrawCallIndex:=DrawChoreographyBatchRange^.DrawCallIndex;
-      CountDrawCallIndices:=0;
-     end;
+    aCommandBuffer.CmdPushConstants(fInstance.MeshCullReset.PipelineLayout.Handle,
+                                    TVkShaderStageFlags(TVkShaderStageFlagBits.VK_SHADER_STAGE_COMPUTE_BIT),
+                                    0,
+                                    SizeOf(ResetPushConstants),
+                                    @ResetPushConstants);
 
-     inc(CountDrawCallIndices);
-
-    end;
-
-   end;
-
-   if CountDrawCallIndices>0 then begin
     if assigned(fInstance.Renderer.VulkanDevice.BreadcrumbBuffer) then begin
-     fInstance.Renderer.VulkanDevice.BreadcrumbBuffer.BeginBreadcrumb(aCommandBuffer.Handle,TpvVulkanBreadcrumbType.FillBuffer,'MeshCullPass1ComputePass.FillCounterFinal1');
+     fInstance.Renderer.VulkanDevice.BreadcrumbBuffer.BeginBreadcrumb(aCommandBuffer.Handle,TpvVulkanBreadcrumbType.Dispatch,'MeshCullPass1ComputePass.ResetDispatch');
     end;
-    aCommandBuffer.CmdFillBuffer(fInstance.PerInFlightFrameGPUDrawIndexedIndirectCommandCounterBuffers[aInFlightFrameIndex].Handle,
-                                 FirstDrawCallIndex*SizeOf(TVkUInt32),
-                                 CountDrawCallIndices*SizeOf(TVkUInt32),
-                                 0);
+    aCommandBuffer.CmdDispatch((CountRanges+255) shr 8,1,1);
     if assigned(fInstance.Renderer.VulkanDevice.BreadcrumbBuffer) then begin
      fInstance.Renderer.VulkanDevice.BreadcrumbBuffer.EndBreadcrumb(aCommandBuffer.Handle);
     end;
-    if assigned(fInstance.Renderer.VulkanDevice.BreadcrumbBuffer) then begin
-     fInstance.Renderer.VulkanDevice.BreadcrumbBuffer.BeginBreadcrumb(aCommandBuffer.Handle,TpvVulkanBreadcrumbType.FillBuffer,'MeshCullPass1ComputePass.FillCounterFinal2');
-    end;
-    aCommandBuffer.CmdFillBuffer(fInstance.PerInFlightFrameGPUDrawIndexedIndirectCommandCounterBuffers[aInFlightFrameIndex].Handle,
-                                 (TpvScene3DRendererInstance.MaxMultiIndirectDrawCalls+FirstDrawCallIndex)*SizeOf(TVkUInt32),
-                                 CountDrawCallIndices*SizeOf(TVkUInt32),
-                                 0);
-    if assigned(fInstance.Renderer.VulkanDevice.BreadcrumbBuffer) then begin
-     fInstance.Renderer.VulkanDevice.BreadcrumbBuffer.EndBreadcrumb(aCommandBuffer.Handle);
-    end;
+
    end;
 
   end;
-
-{ aCommandBuffer.CmdFillBuffer(fInstance.PerInFlightFrameGPUDrawIndexedIndirectCommandCounterBuffers[aInFlightFrameIndex].Handle,
-                               0,
-                               VK_WHOLE_SIZE,
-                               0);}
 
   if assigned(fInstance.Renderer.VulkanDevice.BreadcrumbBuffer) then begin
    fInstance.Renderer.VulkanDevice.BreadcrumbBuffer.BeginBreadcrumb(aCommandBuffer.Handle,TpvVulkanBreadcrumbType.FillBuffer,'MeshCullPass1ComputePass.FillVisibility');
@@ -392,7 +361,7 @@ begin
                                                          0,
                                                          VK_WHOLE_SIZE);
 
-  BufferMemoryBarriers[1]:=TVkBufferMemoryBarrier.Create(TVkAccessFlags(VK_ACCESS_TRANSFER_WRITE_BIT),
+  BufferMemoryBarriers[1]:=TVkBufferMemoryBarrier.Create(TVkAccessFlags(VK_ACCESS_SHADER_WRITE_BIT),
                                                          TVkAccessFlags(VK_ACCESS_SHADER_READ_BIT) or TVkAccessFlags(VK_ACCESS_SHADER_WRITE_BIT),
                                                          VK_QUEUE_FAMILY_IGNORED,
                                                          VK_QUEUE_FAMILY_IGNORED,
@@ -400,11 +369,20 @@ begin
                                                          0,
                                                          VK_WHOLE_SIZE);
 
-  aCommandBuffer.CmdPipelineBarrier(TVkPipelineStageFlags(VK_PIPELINE_STAGE_TRANSFER_BIT),
+  BufferMemoryBarriers[2]:=TVkBufferMemoryBarrier.Create(TVkAccessFlags(VK_ACCESS_SHADER_WRITE_BIT),
+                                                         TVkAccessFlags(VK_ACCESS_INDIRECT_COMMAND_READ_BIT),
+                                                         VK_QUEUE_FAMILY_IGNORED,
+                                                         VK_QUEUE_FAMILY_IGNORED,
+                                                         fInstance.PerInFlightFrameMeshCullIndirectDispatchBuffers[aInFlightFrameIndex].Handle,
+                                                         0,
+                                                         VK_WHOLE_SIZE);
+
+  aCommandBuffer.CmdPipelineBarrier(TVkPipelineStageFlags(VK_PIPELINE_STAGE_TRANSFER_BIT) or
                                     TVkPipelineStageFlags(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT),
+                                    TVkPipelineStageFlags(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT) or TVkPipelineStageFlags(VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT),
                                     0,
                                     0,nil,
-                                    2,@BufferMemoryBarriers[0],
+                                    3,@BufferMemoryBarriers[0],
                                     0,nil);
 
   aCommandBuffer.CmdBindPipeline(VK_PIPELINE_BIND_POINT_COMPUTE,fPipeline.Handle);
@@ -423,53 +401,46 @@ begin
 
   if fInstance.PerInFlightFrameGPUCulledArray[aInFlightFrameIndex,RenderPass] then begin
 
-   DrawChoreographyBatchRangeDynamicArray:=@fInstance.DrawChoreographyBatchRangeFrameBuckets[aInFlightFrameIndex];
+   CountRanges:=fInstance.PerInFlightFrameMeshCullBatchRangeCounts[aInFlightFrameIndex,fCullRenderPass];
+   TotalCommands:=fInstance.PerInFlightFrameMeshCullTotalCommands[aInFlightFrameIndex,fCullRenderPass];
 
-   DrawChoreographyBatchRangeIndexDynamicArray:=@fInstance.DrawChoreographyBatchRangeFrameRenderPassBuckets[aInFlightFrameIndex,RenderPass];
+   if (CountRanges>0) and (TotalCommands>0) then begin
 
-   for DrawChoreographyBatchRangeIndex:=0 to DrawChoreographyBatchRangeIndexDynamicArray^.Count-1 do begin
-
-    DrawChoreographyBatchRange:=@DrawChoreographyBatchRangeDynamicArray^.Items[DrawChoreographyBatchRangeIndexDynamicArray^.Items[DrawChoreographyBatchRangeIndex]];
-
-    if DrawChoreographyBatchRange^.CountCommands>0 then begin
-
-     PushConstants.BaseDrawIndexedIndirectCommandIndex:=DrawChoreographyBatchRange^.FirstCommand;
-     PushConstants.CountDrawIndexedIndirectCommands:=DrawChoreographyBatchRange^.CountCommands;
-     PushConstants.CountObjectIndices:=fInstance.PerInFlightFrameGPUCountObjectIndicesArray[aInFlightFrameIndex];
-     PushConstants.DrawCallIndex:=DrawChoreographyBatchRange^.DrawCallIndex;
-     PushConstants.SkipCulling:=0;
-     PushConstants.VisibilityBufferOffset:=fInstance.PerInFlightFrameGPUDrawIndexedIndirectCommandVisibilityBufferPartSizes[aInFlightFrameIndex]*TpvUInt32(Part);
-     PushConstants.TextureDepthIndex:=Part;
-     case fCullRenderPass of
-      TpvScene3DRendererCullRenderPass.FinalView:begin
-       PushConstants.BaseViewIndex:=fInstance.InFlightFrameStates^[aInFlightFrameIndex].FinalViewIndex;
-       PushConstants.CountViews:=fInstance.InFlightFrameStates^[aInFlightFrameIndex].CountFinalViews;
-      end;
-      TpvScene3DRendererCullRenderPass.CascadedShadowMap:begin
-       PushConstants.BaseViewIndex:=fInstance.InFlightFrameStates^[aInFlightFrameIndex].CascadedShadowMapViewIndex;
-       PushConstants.CountViews:=fInstance.InFlightFrameStates^[aInFlightFrameIndex].CountCascadedShadowMapViews;
-      end;
-      else begin
-       Assert(false);
-      end;
+    PushConstants.CountRanges:=CountRanges;
+    PushConstants.TotalCommands:=TotalCommands;
+    PushConstants.CountObjectIndices:=fInstance.PerInFlightFrameGPUCountObjectIndicesArray[aInFlightFrameIndex];
+    PushConstants.SkipCulling:=0;
+    PushConstants.BatchRangeOffset:=fInstance.PerInFlightFrameMeshCullBatchRangeOffsets[aInFlightFrameIndex,fCullRenderPass];
+    PushConstants.PrefixSumOffset:=fInstance.PerInFlightFrameMeshCullPrefixSumOffsets[aInFlightFrameIndex,fCullRenderPass];
+    PushConstants.VisibilityBufferOffset:=fInstance.PerInFlightFrameGPUDrawIndexedIndirectCommandVisibilityBufferPartSizes[aInFlightFrameIndex]*TpvUInt32(Part);
+    PushConstants.TextureDepthIndex:=Part;
+    case fCullRenderPass of
+     TpvScene3DRendererCullRenderPass.FinalView:begin
+      PushConstants.BaseViewIndex:=fInstance.InFlightFrameStates^[aInFlightFrameIndex].FinalViewIndex;
+      PushConstants.CountViews:=fInstance.InFlightFrameStates^[aInFlightFrameIndex].CountFinalViews;
      end;
-     PushConstants.BaseDrawIndexedIndirectCommandIndexForDisocclusions:=fInstance.PerInFlightFrameGPUDrawIndexedIndirectCommandDisocclusionOffsets[aInFlightFrameIndex]+DrawChoreographyBatchRange^.FirstCommand;
-     PushConstants.DrawCallIndexForDisocclusions:=TpvScene3DRendererInstance.MaxMultiIndirectDrawCalls+DrawChoreographyBatchRange^.DrawCallIndex;
-
-     aCommandBuffer.CmdPushConstants(fPipelineLayout.Handle,
-                                     TVkShaderStageFlags(TVkShaderStageFlagBits.VK_SHADER_STAGE_COMPUTE_BIT),
-                                     0,
-                                     SizeOf(TpvScene3DRendererPassesMeshCullPass1ComputePass.TPushConstants),
-                                     @PushConstants);
-
-     if assigned(fInstance.Renderer.VulkanDevice.BreadcrumbBuffer) then begin
-      fInstance.Renderer.VulkanDevice.BreadcrumbBuffer.BeginBreadcrumb(aCommandBuffer.Handle,TpvVulkanBreadcrumbType.Dispatch,'MeshCullPass1ComputePass.Dispatch');
+     TpvScene3DRendererCullRenderPass.CascadedShadowMap:begin
+      PushConstants.BaseViewIndex:=fInstance.InFlightFrameStates^[aInFlightFrameIndex].CascadedShadowMapViewIndex;
+      PushConstants.CountViews:=fInstance.InFlightFrameStates^[aInFlightFrameIndex].CountCascadedShadowMapViews;
      end;
-     aCommandBuffer.CmdDispatch((DrawChoreographyBatchRange^.CountCommands+255) shr 8,1,1);
-     if assigned(fInstance.Renderer.VulkanDevice.BreadcrumbBuffer) then begin
-      fInstance.Renderer.VulkanDevice.BreadcrumbBuffer.EndBreadcrumb(aCommandBuffer.Handle);
+     else begin
+      Assert(false);
      end;
+    end;
 
+    aCommandBuffer.CmdPushConstants(fPipelineLayout.Handle,
+                                    TVkShaderStageFlags(TVkShaderStageFlagBits.VK_SHADER_STAGE_COMPUTE_BIT),
+                                    0,
+                                    SizeOf(TpvScene3DRendererPassesMeshCullPass1ComputePass.TPushConstants),
+                                    @PushConstants);
+
+    if assigned(fInstance.Renderer.VulkanDevice.BreadcrumbBuffer) then begin
+     fInstance.Renderer.VulkanDevice.BreadcrumbBuffer.BeginBreadcrumb(aCommandBuffer.Handle,TpvVulkanBreadcrumbType.Dispatch,'MeshCullPass1ComputePass.Dispatch');
+    end;
+    aCommandBuffer.CmdDispatchIndirect(fInstance.PerInFlightFrameMeshCullIndirectDispatchBuffers[aInFlightFrameIndex].Handle,
+                                       TpvUInt32(Part)*SizeOf(TVkDispatchIndirectCommand));
+    if assigned(fInstance.Renderer.VulkanDevice.BreadcrumbBuffer) then begin
+     fInstance.Renderer.VulkanDevice.BreadcrumbBuffer.EndBreadcrumb(aCommandBuffer.Handle);
     end;
 
    end;

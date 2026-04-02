@@ -277,6 +277,10 @@ uint flags, shadingModel;
   #define TRANSMISSION
 #endif
 
+#if defined(LOOPOIT) || defined(LOCKOIT) || defined(WBOIT) || defined(MBOIT) || defined(DFAOIT)
+  #define SMOOTH_INSTANCE_DATA_EFFECT
+#endif
+
 #if defined(TRANSMISSION)
 float transmissionFactor = 0.0;
 float volumeDispersion = 0.0;
@@ -499,7 +503,13 @@ void main() {
   float alpha = ((flags & (1u << 31u)) != 0u) ? 1.0 : (textureFetch(0, vec4(1.0), true).w * material.baseColorFactor.w * inColor0.w);
   if((inInstanceDataIndex > 0u) && ((flags & (1u << 31u)) != 0u)){
     vec4 dummyColor = vec4(1.0);
-    if(!applyInstanceDataEffect(uint(inInstanceDataIndex), dummyColor, vec2(texCoords[0]), uvec2(gl_FragCoord.xy), false)){
+    if(!applyInstanceDataEffect(uint(inInstanceDataIndex), dummyColor, vec2(texCoords[0]), uvec2(gl_FragCoord.xy),
+#ifdef SMOOTH_INSTANCE_DATA_EFFECT
+      true
+#else
+      false
+#endif
+    )){
       alpha = 0.0;
     }
   }
@@ -1086,7 +1096,13 @@ void main() {
         outputAlpha = ((flags & 32u) != 0) ? alpha : 1.0; // AMD GPUs under Linux doesn't like mix(1.0, alpha, float(int(uint((flags >> 5u) & 1u)))); due to the unsigned int stuff
   vec4 finalColor = vec4(color.xyz * inColor0.xyz, outputAlpha);
   if(inInstanceDataIndex > 0u){
-    if(!applyInstanceDataEffect(uint(inInstanceDataIndex), finalColor, vec2(texCoords[0]), uvec2(gl_FragCoord.xy), false)){
+    if(!applyInstanceDataEffect(uint(inInstanceDataIndex), finalColor, vec2(texCoords[0]), uvec2(gl_FragCoord.xy),
+#ifdef SMOOTH_INSTANCE_DATA_EFFECT
+      true
+#else
+      false
+#endif
+    )){
       if((flags & (1u << 31u)) == 0u){ 
         finalColor.w = alpha = 0.0;
         if((flags & 32u) != 0){
