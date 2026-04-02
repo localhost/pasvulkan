@@ -9323,7 +9323,7 @@ begin
  if MonitorHandle<>0 then begin
   FillChar(MonitorInfoEx,SizeOf(MonitorInfoEx),#0);
   MonitorInfoEx.cbSize:=SizeOf(MonitorInfoEx);
-  if GetMonitorInfoW(MonitorHandle,@MonitorInfoEx) then begin
+  if {$ifdef fpc}GetMonitorInfo{$else}GetMonitorInfoW{$endif}(MonitorHandle,@MonitorInfoEx) then begin
    FillChar(devMode,SizeOf(devMode),#0);
    devMode.dmSize:=SizeOf(devMode);
    if EnumDisplaySettingsW(@MonitorInfoEx.szDevice[0],ENUM_CURRENT_SETTINGS,{$ifdef fpc}@{$endif}devMode) then begin
