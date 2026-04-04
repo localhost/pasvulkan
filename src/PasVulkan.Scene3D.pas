@@ -32055,8 +32055,6 @@ var SkipListItemIndex,SkipListItemCount,DrawChoreographyBatchItemIndex,
     SkipListItem:TpvScene3D.TGroup.TScene.PSkipListItem;
     DrawChoreographyBatchItemIndices:PSizeIntDynamicArray;
     DrawChoreographyBatchItem:TpvScene3D.TDrawChoreographyBatchItem;
-    EffectiveMaterial:TpvScene3D.TMaterial;
-    MaterialLODLevel:TpvInt32;
 begin
 
  InstancesCount:=0;
@@ -32090,20 +32088,10 @@ begin
      for DrawChoreographyBatchItemIndex:=0 to DrawChoreographyBatchItemIndices^.Count-1 do begin
       DrawChoreographyBatchItemElementIndex:=DrawChoreographyBatchItemIndices^.Items[DrawChoreographyBatchItemIndex];
       DrawChoreographyBatchItem:=fDrawChoreographyBatchItems[DrawChoreographyBatchItemElementIndex];
-      EffectiveMaterial:=DrawChoreographyBatchItem.fMaterial;
-      if fGroup.fHasLODs and (EffectiveMaterial.fLODMaterialIndices.Count>0) then begin
-       MaterialLODLevel:=InstanceNode.fInFlightFrameActiveLODLevel[aInFlightFrameIndex];
-       if MaterialLODLevel>EffectiveMaterial.fLODMaterialIndices.Count then begin
-        MaterialLODLevel:=EffectiveMaterial.fLODMaterialIndices.Count;
-       end;
-       if (MaterialLODLevel>0) and (EffectiveMaterial.fLODMaterialIndices.ItemArray[MaterialLODLevel-1]>=0) and (EffectiveMaterial.fLODMaterialIndices.ItemArray[MaterialLODLevel-1]<fGroup.fMaterials.Count) then begin
-        EffectiveMaterial:=fGroup.fMaterials[EffectiveMaterial.fLODMaterialIndices.ItemArray[MaterialLODLevel-1]];
-       end;
-      end;
-      if EffectiveMaterial.fVisible and
+      if DrawChoreographyBatchItem.fMaterial.fVisible and
          (DrawChoreographyBatchItem.fAlphaMode in aMaterialAlphaModes) and
-         ((not aShadowPass) or (aShadowPass and EffectiveMaterial.fData.CastingShadows and InstanceNode.fInFlightFrameCastingShadows[aInFlightFrameIndex])) and
-        (DrawChoreographyBatchItem.fCountIndices>0) then begin
+         ((not aShadowPass) or (aShadowPass and DrawChoreographyBatchItem.fMaterial.fData.CastingShadows and InstanceNode.fInFlightFrameCastingShadows[aInFlightFrameIndex])) and
+         (DrawChoreographyBatchItem.fCountIndices>0) then begin
        DrawChoreographyBatchItemMaterialAlphaModeBuckets^[DrawChoreographyBatchItem.fAlphaMode,
                                                           DrawChoreographyBatchItem.fPrimitiveTopology,
                                                           DoubleSidedFaceCullingModes[DrawChoreographyBatchItem.fDoubleSided,
