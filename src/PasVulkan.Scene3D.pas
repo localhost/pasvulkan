@@ -1984,6 +1984,7 @@ type EpvScene3D=class(Exception);
              OITBaseCommandIndex:TpvUInt32;
             end;
             PGPUBatchRange=^TGPUBatchRange;
+            TGPUBatchRanges=array of TGPUBatchRange;
             TGPUBatchRangeDynamicArray=TpvDynamicArray<TGPUBatchRange>;
             PGPUBatchRangeDynamicArray=^TGPUBatchRangeDynamicArray;
             TDrawChoreographyBatchRangeDynamicArray=TpvDynamicArray<TDrawChoreographyBatchRange>;

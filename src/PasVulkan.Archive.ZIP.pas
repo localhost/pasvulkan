@@ -1794,13 +1794,11 @@ var NewFileName:TpvRawByteString;
 begin
  NewFileName:=TpvArchiveZIP.CorrectPath(aFileName);
  if fFileName<>NewFileName then begin
-  if (Collection is TpvArchiveZIPEntries) and
-     (length(fFileName)>0) then begin
+  if (Collection is TpvArchiveZIPEntries) and (length(fFileName)>0) then begin
    (Collection as TpvArchiveZIPEntries).fFileNameHashMap.Delete(fFileName);
   end;
   fFileName:=NewFileName;
-  if (Collection is TpvArchiveZIPEntries) and
-     (length(fFileName)>0) then begin
+  if (Collection is TpvArchiveZIPEntries) and (length(fFileName)>0) then begin
    (Collection as TpvArchiveZIPEntries).fFileNameHashMap.Add(fFileName,self);
   end;
  end;

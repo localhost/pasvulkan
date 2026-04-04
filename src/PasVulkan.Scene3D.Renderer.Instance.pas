@@ -857,6 +857,9 @@ type { TpvScene3DRendererInstance }
        fLensRainPostEffectFactor:TpvFloat;
        fLensRainPostEffectTime:TpvDouble;
       private
+       fGPUBatchRanges:TpvScene3D.TGPUBatchRanges;
+       fPrefixSums:TpvUInt32DynamicArray;
+      private
        function GetPixelAmountFactor:TpvDouble;
        procedure SetPixelAmountFactor(const aPixelAmountFactor:TpvDouble);
        procedure SetRaytracingFlags(const aRaytracingFlags:TRaytracingFlags);
@@ -2000,6 +2003,9 @@ begin
 
  end;
 
+ fGPUBatchRanges:=nil;
+ fPrefixSums:=nil;
+
  fHUDCustomPassClass:=nil;
 
  fHUDCustomPassParent:=nil;
@@ -2679,7 +2685,11 @@ begin
 
  fScene3D.RendererInstanceIDManager.FreeID(fID+1);
 
+ fGPUBatchRanges:=nil;
+ fPrefixSums:=nil;
+
  inherited Destroy;
+
 end;
 
 procedure TpvScene3DRendererInstance.AfterConstruction;
@@ -8394,10 +8404,9 @@ var PreviousInFlightFrameIndex,NextInFlightFrameIndex,Index,CountViews,Count:Tpv
     DrawChoreographyBatchRangeDynamicArray:TpvScene3D.PDrawChoreographyBatchRangeDynamicArray;
     DrawChoreographyBatchRangeIndexDynamicArray:TpvScene3D.PDrawChoreographyBatchRangeIndexDynamicArray;
     DrawChoreographyBatchRange:TpvScene3D.PDrawChoreographyBatchRange;
-    GPUBatchRanges:array of TpvScene3D.TGPUBatchRange;
-    PrefixSums:array of TpvUInt32;
     RangeIndex:TpvSizeInt;
     RunningSum:TpvUInt32;
+    GPUBatchRange:TpvScene3D.PGPUBatchRange;
 begin
 
  PreviousInFlightFrameIndex:=aInFlightFrameIndex-1;
@@ -8825,11 +8834,13 @@ begin
 
  // Upload GPU batch ranges and prefix sums for mega-dispatch
  begin
-  GPUBatchRanges:=nil;
-  PrefixSums:=nil;
-  try
-   SetLength(GPUBatchRanges,MaxMultiIndirectDrawCalls);
-   SetLength(PrefixSums,MaxMultiIndirectDrawCalls+1);
+  if length(fGPUBatchRanges)<MaxMultiIndirectDrawCalls then begin
+   SetLength(fGPUBatchRanges,MaxMultiIndirectDrawCalls*2);
+  end;
+  if length(fPrefixSums)<(MaxMultiIndirectDrawCalls+1) then begin
+   SetLength(fPrefixSums,(MaxMultiIndirectDrawCalls+1)*2);
+  end;
+  begin
    BatchRangeGlobalOffset:=0;
    PrefixSumGlobalOffset:=0;
    DrawChoreographyBatchRangeDynamicArray:=@fDrawChoreographyBatchRangeFrameBuckets[aInFlightFrameIndex];
@@ -8854,24 +8865,25 @@ begin
      RunningSum:=0;
      for RangeIndex:=0 to DrawChoreographyBatchRangeIndexDynamicArray^.Count-1 do begin
       DrawChoreographyBatchRange:=@DrawChoreographyBatchRangeDynamicArray^.Items[DrawChoreographyBatchRangeIndexDynamicArray^.Items[RangeIndex]];
-      GPUBatchRanges[BatchRangeGlobalOffset+TpvUInt32(RangeIndex)].BaseCommandIndex:=DrawChoreographyBatchRange^.FirstCommand;
-      GPUBatchRanges[BatchRangeGlobalOffset+TpvUInt32(RangeIndex)].CountCommands:=DrawChoreographyBatchRange^.CountCommands;
-      GPUBatchRanges[BatchRangeGlobalOffset+TpvUInt32(RangeIndex)].DrawCallIndex:=DrawChoreographyBatchRange^.DrawCallIndex;
-      GPUBatchRanges[BatchRangeGlobalOffset+TpvUInt32(RangeIndex)].BaseCommandIndexForDisocclusions:=fPerInFlightFrameGPUDrawIndexedIndirectCommandDisocclusionOffsets[aInFlightFrameIndex]+DrawChoreographyBatchRange^.FirstCommand;
-      GPUBatchRanges[BatchRangeGlobalOffset+TpvUInt32(RangeIndex)].DrawCallIndexForDisocclusions:=MaxMultiIndirectDrawCalls+DrawChoreographyBatchRange^.DrawCallIndex;
-      GPUBatchRanges[BatchRangeGlobalOffset+TpvUInt32(RangeIndex)].AlphaMode:=TpvUInt32(DrawChoreographyBatchRange^.AlphaMode);
+      GPUBatchRange:=@fGPUBatchRanges[BatchRangeGlobalOffset+RangeIndex];
+      GPUBatchRange^.BaseCommandIndex:=DrawChoreographyBatchRange^.FirstCommand;
+      GPUBatchRange^.CountCommands:=DrawChoreographyBatchRange^.CountCommands;
+      GPUBatchRange^.DrawCallIndex:=DrawChoreographyBatchRange^.DrawCallIndex;
+      GPUBatchRange^.BaseCommandIndexForDisocclusions:=fPerInFlightFrameGPUDrawIndexedIndirectCommandDisocclusionOffsets[aInFlightFrameIndex]+DrawChoreographyBatchRange^.FirstCommand;
+      GPUBatchRange^.DrawCallIndexForDisocclusions:=MaxMultiIndirectDrawCalls+DrawChoreographyBatchRange^.DrawCallIndex;
+      GPUBatchRange^.AlphaMode:=TpvUInt32(DrawChoreographyBatchRange^.AlphaMode);
       if (CullRenderPass=TpvScene3DRendererCullRenderPass.FinalView) and
          (DrawChoreographyBatchRange^.AlphaMode in [TpvScene3D.TMaterial.TAlphaMode.Opaque,TpvScene3D.TMaterial.TAlphaMode.Mask]) then begin
-       GPUBatchRanges[BatchRangeGlobalOffset+TpvUInt32(RangeIndex)].OITDrawCallIndex:=(MaxMultiIndirectDrawCalls shl 1)+DrawChoreographyBatchRange^.DrawCallIndex;
-       GPUBatchRanges[BatchRangeGlobalOffset+TpvUInt32(RangeIndex)].OITBaseCommandIndex:=fPerInFlightFrameGPUDrawIndexedIndirectCommandOITPromotionOffsets[aInFlightFrameIndex]+DrawChoreographyBatchRange^.FirstCommand;
+       GPUBatchRange^.OITDrawCallIndex:=(MaxMultiIndirectDrawCalls shl 1)+DrawChoreographyBatchRange^.DrawCallIndex;
+       GPUBatchRange^.OITBaseCommandIndex:=fPerInFlightFrameGPUDrawIndexedIndirectCommandOITPromotionOffsets[aInFlightFrameIndex]+DrawChoreographyBatchRange^.FirstCommand;
       end else begin
-       GPUBatchRanges[BatchRangeGlobalOffset+TpvUInt32(RangeIndex)].OITDrawCallIndex:=TpvUInt32($ffffffff);
-       GPUBatchRanges[BatchRangeGlobalOffset+TpvUInt32(RangeIndex)].OITBaseCommandIndex:=0;
+       GPUBatchRange^.OITDrawCallIndex:=TpvUInt32($ffffffff);
+       GPUBatchRange^.OITBaseCommandIndex:=0;
       end;
-      PrefixSums[PrefixSumGlobalOffset+TpvUInt32(RangeIndex)]:=RunningSum;
+      fPrefixSums[PrefixSumGlobalOffset+RangeIndex]:=RunningSum;
       RunningSum:=RunningSum+DrawChoreographyBatchRange^.CountCommands;
      end;
-     PrefixSums[PrefixSumGlobalOffset+TpvUInt32(DrawChoreographyBatchRangeIndexDynamicArray^.Count)]:=RunningSum;
+     fPrefixSums[PrefixSumGlobalOffset+DrawChoreographyBatchRangeIndexDynamicArray^.Count]:=RunningSum;
      fPerInFlightFrameMeshCullBatchRangeCounts[aInFlightFrameIndex,CullRenderPass]:=DrawChoreographyBatchRangeIndexDynamicArray^.Count;
      fPerInFlightFrameMeshCullTotalCommands[aInFlightFrameIndex,CullRenderPass]:=RunningSum;
      BatchRangeGlobalOffset:=BatchRangeGlobalOffset+TpvUInt32(DrawChoreographyBatchRangeIndexDynamicArray^.Count);
@@ -8885,7 +8897,7 @@ begin
     Renderer.VulkanDevice.MemoryStaging.Upload(fScene3D.VulkanStagingQueue,
                                                fScene3D.VulkanStagingCommandBuffer,
                                                fScene3D.VulkanStagingFence,
-                                               GPUBatchRanges[0],
+                                               fGPUBatchRanges[0],
                                                fPerInFlightFrameMeshCullBatchRangeBuffers[aInFlightFrameIndex],
                                                0,
                                                BatchRangeGlobalOffset*SizeOf(TpvScene3D.TGPUBatchRange));
@@ -8894,14 +8906,11 @@ begin
     Renderer.VulkanDevice.MemoryStaging.Upload(fScene3D.VulkanStagingQueue,
                                                fScene3D.VulkanStagingCommandBuffer,
                                                fScene3D.VulkanStagingFence,
-                                               PrefixSums[0],
+                                               fPrefixSums[0],
                                                fPerInFlightFrameMeshCullPrefixSumBuffers[aInFlightFrameIndex],
                                                0,
                                                PrefixSumGlobalOffset*SizeOf(TpvUInt32));
    end;
-  finally
-   PrefixSums:=nil;
-   GPUBatchRanges:=nil;
   end;
  end;
 {for RenderPass:=TpvScene3DRendererRenderPassFirst to TpvScene3DRendererRenderPassLast do begin
