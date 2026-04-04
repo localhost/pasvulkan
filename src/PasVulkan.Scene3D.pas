@@ -398,14 +398,28 @@ type EpvScene3D=class(Exception);
                PreviousCachedVerticesDeviceAddress:TVkDeviceAddress;   // + 8 =  24
                GenerationDeviceAddress:TVkDeviceAddress;               // + 8 =  32
                PreviousGenerationDeviceAddress:TVkDeviceAddress;       // + 8 =  40
-               Reserved:TVkDeviceAddress;                              // + 8 =  48
+               MatrixPairDeviceAddress:TVkDeviceAddress;               // + 8 =  48 (BDA to MatrixPair buffer)
+               LODInfoDeviceAddress:TVkDeviceAddress;                  // + 8 =  56 (BDA to LODInfo buffer)
+               LODNeededCurrentDeviceAddress:TVkDeviceAddress;         // + 8 =  64 (BDA to lodNeeded[currentIFF])
               );
               true:(
-               RawData:array[0..47] of TpvUInt8;
+               RawData:array[0..63] of TpvUInt8;
               );
             end;
             PGPUGlobalBDAPointers=^TGPUGlobalBDAPointers;
             TGlobalVulkanBDAPointersBuffers=array[0..MaxInFlightFrames-1] of TpvVulkanBuffer;
+            { TGPUMatrixPair — 128 bytes, two full mat4x4 matrices for current and previous frame }
+            TGPUMatrixPair=packed record
+             ModelMatrix:TpvMatrix4x4;                                //  64 =  64 (current frame world transform)
+             PreviousModelMatrix:TpvMatrix4x4;                        // +64 = 128 (previous frame, for velocity)
+            end;
+            PGPUMatrixPair=^TGPUMatrixPair;
+            TGPUMatrixPairs=array of TGPUMatrixPair;
+            TGlobalVulkanMatrixPairDynamicArray=TpvDynamicArray<TGPUMatrixPair>;
+            PGlobalVulkanMatrixPairDynamicArray=^TGlobalVulkanMatrixPairDynamicArray;
+            TGlobalVulkanMatrixPairDynamicArrays=array[0..MaxInFlightFrames-1] of TGlobalVulkanMatrixPairDynamicArray;
+            TGlobalVulkanMatrixPairBuffers=array[0..MaxInFlightFrames-1] of TpvVulkanBuffer;
+            TGlobalVulkanMatrixPairLocks=array[0..MaxInFlightFrames-1] of TPasMPMultipleReaderSingleWriterLock;
             { TGPUDrawInfoMatrix — packed affine transform as 3 x TpvVector4 = 48 bytes }
             { Each vec4 stores original column .xyz with translation component in .w: }
             {   [0] = vec4(col0.xyz, translation.x)                                   }
@@ -414,48 +428,58 @@ type EpvScene3D=class(Exception);
             { The implicit 4th row is always (0, 0, 0, 1) for affine transforms.      }
             TGPUDrawInfoMatrix=packed array[0..2] of TpvVector4;
             PGPUDrawInfoMatrix=^TGPUDrawInfoMatrix;
-            { TGPUDrawInfo - 128 bytes per draw command, stored in SSBO at binding 0 }
+            { TGPUDrawInfo - 32 bytes per draw command, stored in SSBO at binding 0 }
             { Layout must match the DrawInfo struct in drawinfo.glsl exactly (std430) }
-            { BDA pointers moved to TGPUGlobalBDAPointers at binding 7 (global for big-buffer mode) }
+            { Matrices moved to separate MatrixPairBuffer, accessed via MatrixID }
             TGPUDrawInfo=packed record
              case boolean of
               false:(
-               // BDA pointers commented out — now in TGPUGlobalBDAPointers at binding 7
-               // For future per-group buffers, uncomment these and remove from TGPUGlobalBDAPointers
-               //CachedVerticesDeviceAddress:TVkDeviceAddress;           //   8 =   8 (BDA to CachedVertex array)
-               //StaticVerticesDeviceAddress:TVkDeviceAddress;           // + 8 =  16 (BDA to StaticVertex array)
-               //PreviousCachedVerticesDeviceAddress:TVkDeviceAddress;   // + 8 =  24 (BDA to previous frame CachedVertex, velocity)
-               //GenerationDeviceAddress:TVkDeviceAddress;               // + 8 =  32 (BDA to per-vertex generation, velocity)
-               //PreviousGenerationDeviceAddress:TVkDeviceAddress;       // + 8 =  40 (BDA to previous frame generation, velocity)
-               //Reserved:TVkDeviceAddress;                              // + 8 =  48 (padding for mat4 alignment)
-               ModelMatrix:TGPUDrawInfoMatrix;                         //  48 =  48 (affine world transform, Identity for pre-transformed)
-               PreviousModelMatrix:TGPUDrawInfoMatrix;                 // +48 =  96 (previous frame affine world transform, velocity)
-               InstanceDataIndex:TpvUInt32;                            // + 4 = 100
-               ObjectIndex:TpvUInt32;                                  // + 4 = 104
-               Flags:TpvUInt32;                                        // + 4 = 108
-               Reserved:TpvUInt32;                                     // + 4 = 112 (reserved for future use)
-               Padding:array[0..3] of TpvUInt32;                       // +16 = 128 (padding to power-of-two)
-              );                                                       //  ==   ==
-              true:(                                                   // 128  128 per draw
-               RawData:array[0..127] of TpvUInt8;
+               MatrixID:TpvUInt32;                                     //   4 =   4 (index into MatrixPairBuffer, 0=Identity)
+               InstanceDataIndex:TpvUInt32;                            // + 4 =   8
+               MeshObjectID:TpvUInt32;                                 // + 4 =  12
+               Flags:TpvUInt32;                                        // + 4 =  16 (RenderPassMask bits)
+               NodeMatricesIndex:TpvUInt32;                            // + 4 =  20 (index into NodeMatrices, for lodNeeded atomicOr)
+               Reserved:array[0..2] of TpvUInt32;                      // +12 =  32 (padding to power-of-two)
+              );                                                        //  ==   ==
+              true:(                                                    //  32   32 per draw
+               RawData:array[0..31] of TpvUInt8;
               );
             end;
             PGPUDrawInfo=^TGPUDrawInfo;
             TGPUDrawInfos=array of TGPUDrawInfo;
+            { TGPULODInfo - 128 bytes per LOD-enabled submesh (padded, 5x uvec4 active = 80 bytes) }
+            { Stores per-LOD geometry data for command-rewriting in mesh_cull.comp }
+            { CountLODs=1 means no LOD (noop), 2..4 means active LOD levels (primary + up to 3 variants) }
+            TGPULODInfo=packed record
+             case boolean of
+              false:(
+               CountLODs:TpvUInt32;                                    //   4 =   4 (1=noop, 2..4=LOD levels)
+               Reserved0:TpvUInt32;                                    // + 4 =   8
+               Reserved1:TpvUInt32;                                    // + 4 =  12
+               Reserved2:TpvUInt32;                                    // + 4 =  16
+               Thresholds:array[0..3] of TpvFloat;                     // +16 =  32 (screenCoverage thresholds, vec4)
+               FirstIndices:array[0..3] of TpvUInt32;                  // +16 =  48 (per LOD level 0..3, uvec4)
+               CountIndices:array[0..3] of TpvUInt32;                  // +16 =  64 (per LOD level 0..3, uvec4)
+               FirstVertices:array[0..3] of TpvInt32;                  // +16 =  80 (vertexOffset per LOD, ivec4)
+              );
+              true:(
+               Padding:array[0..127] of TpvUInt8;                      // 128 bytes padded
+              );
+            end;
+            PGPULODInfo=^TGPULODInfo;
+            TGPULODInfos=array of TGPULODInfo;
+            TGlobalLODInfoDynamicArray=TpvDynamicArray<TGPULODInfo>;
+            PGlobalLODInfoDynamicArray=^TGlobalLODInfoDynamicArray;
             TGlobalVulkanDrawInfoBuffers=array[0..MaxInFlightFrames-1] of TpvVulkanBuffer;
             TGlobalVulkanDrawInfoDynamicArray=TpvDynamicArray<TGPUDrawInfo>;
             PGlobalVulkanDrawInfoDynamicArray=^TGlobalVulkanDrawInfoDynamicArray;
             TGlobalVulkanDrawInfoDynamicArrays=array[0..MaxInFlightFrames-1] of TGlobalVulkanDrawInfoDynamicArray;
-            TCullData=record
-             RenderInstance:TObject;
-            end;
-            PCullData=^TCullData;
-            TGlobalRenderInstanceCullDataDynamicArray=TpvDynamicArray<TCullData>;
-            PGlobalRenderInstanceCullDataDynamicArray=^TGlobalRenderInstanceCullDataDynamicArray;
-            TGlobalRenderInstanceCullDataDynamicArrays=array[0..MaxInFlightFrames-1] of TGlobalRenderInstanceCullDataDynamicArray;
+            TGlobalVulkanDrawInfoLocks=array[0..MaxInFlightFrames-1] of TPasMPMultipleReaderSingleWriterLock;
             TMeshComputeStagePushConstants=record
              IndexOffset:UInt32;
              CountIndices:UInt32;
+             LODNeededBDA:TVkDeviceAddress;
+             LODTransformAllLevels:TpvUInt32;
             end;
             PMeshComputeStagePushConstants=^TMeshComputeStagePushConstants;
             TMeshBoundsComputePushConstants=record
@@ -1869,11 +1893,12 @@ type EpvScene3D=class(Exception);
               fDoubleSided:boolean;
               fMaterial:TpvScene3D.TMaterial;
               fNode:TObject;
-              fObjectIndex:TpvUInt32;
+              fMeshObjectID:TpvUInt32;
               fMesh:TObject;
               fMeshPrimitive:TpvSizeInt;
               fStartIndex:TpvSizeInt;
               fCountIndices:TpvSizeInt;
+              fLODInfoIndex:TpvUInt32;
              public
               constructor Create; reintroduce;
               function Clone:TDrawChoreographyBatchItem;
@@ -1889,11 +1914,12 @@ type EpvScene3D=class(Exception);
               property DoubleSided:boolean read fDoubleSided write fDoubleSided;
               property Material:TpvScene3D.TMaterial read fMaterial write fMaterial;
               property Node:TObject read fNode write fNode;
-              property ObjectIndex:TpvUInt32 read fObjectIndex write fObjectIndex;
+              property MeshObjectID:TpvUInt32 read fMeshObjectID write fMeshObjectID;
               property Mesh:TObject read fMesh write fMesh;
               property MeshPrimitive:TpvSizeInt read fMeshPrimitive write fMeshPrimitive;
               property StartIndex:TpvSizeInt read fStartIndex write fStartIndex;
               property CountIndices:TpvSizeInt read fCountIndices write fCountIndices;
+              property LODInfoIndex:TpvUInt32 read fLODInfoIndex write fLODInfoIndex;
             end;
             TDrawChoreographyBatchItemArray=array of TDrawChoreographyBatchItem;
             { TDrawChoreographyBatchItems }
@@ -1917,8 +1943,8 @@ type EpvScene3D=class(Exception);
               case TpvUInt8 of
                0:(
                 DrawIndexedIndirectCommand:TVkDrawIndexedIndirectCommand;
-                ObjectIndex:TpvUInt32;
                 BoundingSphereIndex:TpvUInt32;
+                LODInfoIndex:TpvUInt32;
                 Flags:TpvUInt32;
                );
                1:(
@@ -1936,8 +1962,8 @@ type EpvScene3D=class(Exception);
             TPerInFlightFrameGPUDrawIndexedIndirectCommandBufferPartSizes=array[0..MaxInFlightFrames-1] of TpvSizeUInt;
             TPerInFlightFrameGPUCulledArray=array[0..MaxInFlightFrames-1,TpvScene3DRendererRenderPass] of Boolean;
             PPerInFlightFrameGPUCulledArray=^TPerInFlightFrameGPUCulledArray;
-            TPerInFlightFrameGPUCountObjectIndicesArray=array[0..MaxInFlightFrames-1] of TpvSizeInt;
-            PPerInFlightFrameGPUCountObjectIndicesArray=^TPerInFlightFrameGPUCountObjectIndicesArray;
+            TPerInFlightFrameGPUCountMeshObjectIDsArray=array[0..MaxInFlightFrames-1] of TpvSizeInt;
+            PPerInFlightFrameGPUCountMeshObjectIndicesArray=^TPerInFlightFrameGPUCountMeshObjectIDsArray;
             TDrawChoreographyBatchRange=record
              AlphaMode:TpvScene3D.TMaterial.TAlphaMode;
              PrimitiveTopology:TpvScene3D.TPrimitiveTopology;
@@ -2792,7 +2818,7 @@ type EpvScene3D=class(Exception);
                             fCacheMatrixGeneration:TpvUInt64;
                             fParents:array[0..MaxInFlightFrames-1] of TpvSizeInt;
                             fCullVisibleIDs:array[0..MaxInFlightFrames-1] of TpvSizeInt;
-                            fCullObjectID:TpvUInt32;
+                            fMeshObjectID:TpvUInt32;
                             fRaytracingGroupInstanceNodeID:TpvUInt64;
                             fRaytracingMask:TpvUInt8;
                             fCastingShadows:Boolean;
@@ -2802,6 +2828,8 @@ type EpvScene3D=class(Exception);
                             fInFlightFrameVisible:array[0..MaxInFlightFrames-1] of Boolean;
                             fInFlightFrameActiveLODLevel:array[0..MaxInFlightFrames-1] of TpvInt32;
                             fInFlightFrameScreenCoverage:array[0..MaxInFlightFrames-1] of TpvFloat;
+                            fActiveRenderPasses:TpvScene3DRendererRenderPasses;
+                            procedure SetActiveRenderPasses(const aActiveRenderPasses:TpvScene3DRendererRenderPasses);
                            public
                             constructor Create(const aGroup:TpvScene3D.TGroup;
                                                const aGroupNode:TpvScene3D.TGroup.TNode;
@@ -2822,6 +2850,7 @@ type EpvScene3D=class(Exception);
                            public
                             property WorkMatrix:TpvMatrix4x4 read fWorkMatrix;
                             property BoundingSpheres:TInstanceBoundingSpheres read fBoundingSpheres;
+                            property ActiveRenderPasses:TpvScene3DRendererRenderPasses read fActiveRenderPasses write SetActiveRenderPasses;
                           end;
                           TInstanceNode=TpvScene3D.TGroup.TInstance.TNode;
                           //PNode=^TInstanceNode;
@@ -3167,7 +3196,8 @@ type EpvScene3D=class(Exception);
                             fPreviousModelMatrix:TpvMatrix4x4D;
                             fWorkModelMatrix:TpvMatrix4x4D;
                             fModelMatrices:TRenderInstanceMatrixInstances;
-                            fNodeCullObjectIDs:TpvUInt32DynamicArray;
+                            fNodeMeshObjectIDs:TpvUInt32DynamicArray;
+                            fMatrixID:TpvUInt32;
                             fBoundingBox:TpvAABB;
                             fBoundingSphere:TpvSphere;
                             fActiveMask:TPasMPUInt32;
@@ -3177,6 +3207,8 @@ type EpvScene3D=class(Exception);
                             fInstanceDataIndices:TRenderInstanceDataIndices;
                             fGeneration:TpvUInt64;
                             fGenerations:TRenderInstanceGenerations;
+                            fDrawInfoGenerations:TRenderInstanceGenerations;
+                            fActiveRenderPassesGenerations:TRenderInstanceGenerations;
                             fAssignedVirtualInstance:TInstance;
                             fAssignedVirtualInstanceRenderInstance:TRenderInstance;
                             fTag:TpvUInt64;
@@ -3192,7 +3224,7 @@ type EpvScene3D=class(Exception);
                            public
                             property ModelMatrix:TpvMatrix4x4D read fModelMatrix write fModelMatrix;
                             property ModelMatrices:TRenderInstanceMatrixInstances read fModelMatrices;
-                            property NodeCullObjectIDs:TpvUInt32DynamicArray read fNodeCullObjectIDs;
+                            property NodeMeshObjectIDs:TpvUInt32DynamicArray read fNodeMeshObjectIDs;
                             property ApplyCameraRelativeTransform:TPasMPBool32 read fApplyCameraRelativeTransform write fApplyCameraRelativeTransform;
                            public
                             property InstanceDataIndex:TpvUInt32 read fInstanceDataIndex write fInstanceDataIndex;
@@ -3204,6 +3236,8 @@ type EpvScene3D=class(Exception);
                             property ActiveMask:TPasMPUInt32 read fActiveMask write fActiveMask;
                           end;
                           TRenderInstances=TpvObjectGenericList<TRenderInstance>;
+                          TRenderInstanceArray=array[0..65535] of TRenderInstance;
+                          PRenderInstanceArray=^TRenderInstanceArray;
                           TPerInFlightFrameRenderInstance=record
                            BoundingBox:TpvAABB;
                            RenderInstance:TObject;
@@ -3221,7 +3255,6 @@ type EpvScene3D=class(Exception);
                           TCullVisibleBitmaps=array[0..MaxInFlightFrames-1] of TCullVisibleBitmap;
                           TCullVisibleNodePath=array of TpvSizeInt;
                           TCullVisibleNodePaths=array[0..MaxInFlightFrames-1] of TCullVisibleNodePath;
-                          TOnNodeFilter=function(const aInFlightFrameIndex:TpvSizeInt;const aRendererInstance:TObject;const aRenderPass:TpvScene3DRendererRenderPass;const aGroup:TpvScene3D.TGroup;const aGroupInstance:TpvScene3D.TGroup.TInstance;const aNode:TpvScene3D.TGroup.TNode;const aInstanceNode:TpvScene3D.TGroup.TInstance.TNode):boolean of object;
                           TOnUpdate=function(const aInFlightFrameIndex:TpvSizeInt):boolean of object;
                           type TAABBTreeSkipListItem=record
                                 public
@@ -3326,7 +3359,7 @@ type EpvScene3D=class(Exception);
                      fUserData:pointer;
                      fOnNodeMatrixPre:TOnNodeMatrix;
                      fOnNodeMatrixPost:TOnNodeMatrix;
-                     fOnNodeFilter:TpvScene3D.TGroup.TInstance.TOnNodeFilter;
+                     fActiveRenderPasses:TpvScene3DRendererRenderPasses;
                      fOnUpdate:TpvScene3D.TGroup.TInstance.TOnUpdate;
                      fUploaded:boolean;
                      fDirtyCounter:TPasMPInt32;
@@ -3352,7 +3385,6 @@ type EpvScene3D=class(Exception);
                      fPerInFlightFrameRenderInstances:TPerInFlightFrameRenderInstances;
                      fPointerToPerInFlightFrameRenderInstances:PPerInFlightFrameRenderInstances;
                     public
-                     fVulkanPerInFlightFrameFirstInstances:array[0..MaxInFlightFrames-1,0..MaxRendererInstances-1,TpvScene3DRendererRenderPass] of TpvSizeInt;
                      fVulkanPerInFlightFrameInstancesCounts:array[0..MaxInFlightFrames-1,0..MaxRendererInstances-1,TpvScene3DRendererRenderPass] of TpvSizeInt;
                     private
                      fActiveScenes:array[-1..MaxInFlightFrames-1] of TpvScene3D.TGroup.TScene;
@@ -3371,6 +3403,9 @@ type EpvScene3D=class(Exception);
                      fApplyCameraRelativeTransform:TPasMPBool32;
                      fProcessState:TPasMPUInt32;
                      fTag:TpvUInt64;
+                     fActiveRenderPassesGeneration:TPasMPUInt64;
+                     fActiveRenderPassesGenerations:array[0..MaxInFlightFrames-1] of TPasMPUInt64;
+                     procedure SetActiveRenderPasses(const aActiveRenderPasses:TpvScene3DRendererRenderPasses);
                      procedure ConstructData(const aLock:boolean);
                      procedure AllocateData;
                      procedure ReleaseData;
@@ -3387,7 +3422,6 @@ type EpvScene3D=class(Exception);
                                                                       const aViewBaseIndex:TpvSizeInt;
                                                                       const aCountViews:TpvSizeInt;
                                                                       const aFrustums:TpvFrustumDynamicArray;
-                                                                      out aFirstInstance:TpvSizeInt;
                                                                       out aInstancesCount:TpvSizeInt);
                      procedure Prepare(const aInFlightFrameIndex:TpvSizeInt;
                                        const aRendererInstance:TObject;
@@ -3473,17 +3507,14 @@ type EpvScene3D=class(Exception);
                      procedure UploadFrame(const aInFlightFrameIndex:TpvSizeInt);
                      function GetBakedMeshFromSplittedNode(const aNode:TpvScene3D.TGroup.TNode;
                                                            const aRelative:boolean=false;
-                                                           const aMaterialAlphaModes:TpvScene3D.TMaterial.TAlphaModes=[TpvScene3D.TMaterial.TAlphaMode.Opaque,TpvScene3D.TMaterial.TAlphaMode.Blend,TpvScene3D.TMaterial.TAlphaMode.Mask];
-                                                           const aNodeFilter:TOnNodeFilter=nil):TpvScene3D.TBakedMesh;
+                                                           const aMaterialAlphaModes:TpvScene3D.TMaterial.TAlphaModes=[TpvScene3D.TMaterial.TAlphaMode.Opaque,TpvScene3D.TMaterial.TAlphaMode.Blend,TpvScene3D.TMaterial.TAlphaMode.Mask]):TpvScene3D.TBakedMesh;
                      function GetBakedMeshFromSplittedNodeList(const aNodes:TpvScene3D.TGroup.TNodes;
                                                                const aRelative:boolean=false;
-                                                               const aMaterialAlphaModes:TpvScene3D.TMaterial.TAlphaModes=[TpvScene3D.TMaterial.TAlphaMode.Opaque,TpvScene3D.TMaterial.TAlphaMode.Blend,TpvScene3D.TMaterial.TAlphaMode.Mask];
-                                                               const aNodeFilter:TOnNodeFilter=nil):TpvScene3D.TBakedMesh;
+                                                               const aMaterialAlphaModes:TpvScene3D.TMaterial.TAlphaModes=[TpvScene3D.TMaterial.TAlphaMode.Opaque,TpvScene3D.TMaterial.TAlphaMode.Blend,TpvScene3D.TMaterial.TAlphaMode.Mask]):TpvScene3D.TBakedMesh;
                      function GetBakedMesh(const aRelative:boolean=false;
                                            const aWithDynamicMeshs:boolean=false;
                                            const aRootNodeIndex:TpvSizeInt=-1;
-                                           const aMaterialAlphaModes:TpvScene3D.TMaterial.TAlphaModes=[TpvScene3D.TMaterial.TAlphaMode.Opaque,TpvScene3D.TMaterial.TAlphaMode.Blend,TpvScene3D.TMaterial.TAlphaMode.Mask];
-                                           const aNodeFilter:TOnNodeFilter=nil):TpvScene3D.TBakedMesh;
+                                           const aMaterialAlphaModes:TpvScene3D.TMaterial.TAlphaModes=[TpvScene3D.TMaterial.TAlphaMode.Opaque,TpvScene3D.TMaterial.TAlphaMode.Blend,TpvScene3D.TMaterial.TAlphaMode.Mask]):TpvScene3D.TBakedMesh;
                      function GetCamera(const aNodeIndex:TPasGLTFSizeInt;
                                         out aCameraMatrix:TpvMatrix4x4;
                                         out aViewMatrix:TpvMatrix4x4;
@@ -3549,7 +3580,7 @@ type EpvScene3D=class(Exception);
                     published
                      property OnNodeMatrixPre:TOnNodeMatrix read fOnNodeMatrixPre write fOnNodeMatrixPre;
                      property OnNodeMatrixPost:TOnNodeMatrix read fOnNodeMatrixPost write fOnNodeMatrixPost;
-                     property OnNodeFilter:TpvScene3D.TGroup.TInstance.TOnNodeFilter read fOnNodeFilter write fOnNodeFilter;
+                     property ActiveRenderPasses:TpvScene3DRendererRenderPasses read fActiveRenderPasses write SetActiveRenderPasses;
                      property OnUpdate:TpvScene3D.TGroup.TInstance.TOnUpdate read fOnUpdate write fOnUpdate;
                    end;
                    { TVirtualInstance }
@@ -3671,6 +3702,7 @@ type EpvScene3D=class(Exception);
               fLightNameIndexHashMap:TpvScene3D.TGroup.TNameIndexHashMap;
               fLightNameIndexHashMapLowerCase:TpvScene3D.TGroup.TNameIndexHashMap;
               fNodes:TpvScene3D.TGroup.TNodes;
+              fMeshNodeIndices:TSizeIntDynamicArrayEx;
               fNodeNameIndexHashMap:TpvScene3D.TGroup.TNameIndexHashMap;
               fNodeNameIndexHashMapLowerCase:TpvScene3D.TGroup.TNameIndexHashMap;
               fScenes:TpvScene3D.TGroup.TScenes;
@@ -3705,7 +3737,6 @@ type EpvScene3D=class(Exception);
               fCachedVertexBufferMemoryBarriers:TVkBufferMemoryBarrierArray;
               fRaytracingMask:TpvUInt8;
               fCastingShadows:Boolean;
-              fOnNodeFilter:TpvScene3D.TGroup.TInstance.TOnNodeFilter;
               fNewLightMap:TpvScene3D.TGroup.TLights;
               fNewImageMap:TpvScene3D.TImages;
               fNewSamplerMap:TpvScene3D.TSamplers;
@@ -3721,9 +3752,11 @@ type EpvScene3D=class(Exception);
               procedure CollectAllSceneNodesAndSplitNodesIntoAnimatedOrNotAnimatedSubtreesPerScene;
               procedure CalculateBoundingBox;
               procedure CollectUsedVisibleDrawNodes;
+              procedure CollectMeshNodeIndices;
               procedure CollectMaterials;
               procedure CollectNodeUsedJoints;
               procedure ConstructDrawChoreographyBatchItems;
+              procedure CollectLODData;
               procedure ConstructSkipLists;
               procedure UpdateCachedVertices(const aInFlightFrameIndex:TpvSizeInt);
               function GetNodeIndexByName(const aNodeName:TpvUTF8String):TpvSizeInt;
@@ -3843,7 +3876,6 @@ type EpvScene3D=class(Exception);
               property Scenes:TScenes read fScenes;
               property Scene:TScene read fScene;
               property MaximumCountInstances:TpvSizeint read fMaximumCountInstances write fMaximumCountInstances;
-              property OnNodeFilter:TpvScene3D.TGroup.TInstance.TOnNodeFilter read fOnNodeFilter write fOnNodeFilter;
               property RaytracingMask:TpvUInt8 read fRaytracingMask write fRaytracingMask;
               property CastingShadow:Boolean read fCastingShadows write fCastingShadows;
             end;
@@ -4059,7 +4091,7 @@ type EpvScene3D=class(Exception);
                (TFaceCullingMode.None,TFaceCullingMode.None)
               );
              PVMFSignature:TPVMFSignature=('P','V','M','F');
-             PVMFVersion=TpVUInt32($00000009);
+             PVMFVersion=TpVUInt32($0000000a);
              ProceduralTextureImageHookDefault:TProceduralTextureImageHook=(Hook:nil;AllocateTexture:true);
              EmptyGPUInstanceData:TGPUInstanceData=
               (
@@ -4159,7 +4191,6 @@ type EpvScene3D=class(Exception);
        fImageDescriptorGeneration:TpvUInt64;
        fImageDescriptorProcessedGeneration:TpvUInt64;
 //     fGlobalVulkanViewUniformStagingBuffers:array[0..MaxInFlightFrames-1] of TpvVulkanBuffer;
-       fGlobalRenderInstanceCullDataDynamicArrays:TGlobalRenderInstanceCullDataDynamicArrays;
        fGlobalBoundingSphereDynamicArrays:array[0..MaxInFlightFrames-1] of TpvVector4DynamicArray;
        fGlobalBoundingSphereBuffers:array[0..MaxInFlightFrames-1] of TpvVulkanBuffer;
        fGlobalBoundingSphereMaxCounts:array[0..MaxInFlightFrames-1] of TpvUInt32;
@@ -4168,8 +4199,8 @@ type EpvScene3D=class(Exception);
        fGlobalBoundingSphereVulkanDescriptorSetLayout:TpvVulkanDescriptorSetLayout;
        fGlobalBoundingSphereVulkanDescriptorPool:TpvVulkanDescriptorPool;
        fGlobalBoundingSphereVulkanDescriptorSets:TGlobalBoundingSphereVulkanDescriptorSets;
-       fGlobalVulkanInstanceCounts:TGlobalVulkanInstanceCounts;
        fGlobalVulkanDrawInfoDynamicArrays:TGlobalVulkanDrawInfoDynamicArrays;
+       fGlobalVulkanDrawInfoLocks:TGlobalVulkanDrawInfoLocks;
        fGlobalVulkanDrawInfoBuffers:TGlobalVulkanDrawInfoBuffers;
        fGlobalVulkanBDAPointersBuffers:TGlobalVulkanBDAPointersBuffers;
        fGlobalVulkanBDAPointersData:array[0..MaxInFlightFrames-1] of TGPUGlobalBDAPointers;
@@ -4194,9 +4225,38 @@ type EpvScene3D=class(Exception);
        fVulkanMaterialUniformBuffers:array[0..MaxInFlightFrames-1] of TpvVulkanBuffer;
        fVulkanGPUInstanceDataBuffers:array[0..MaxInFlightFrames-1] of TpvVulkanBuffer;
        fTechniques:TpvTechniques;
-       fCullObjectIDLock:TPasMPSlimReaderWriterLock;
-       fCullObjectIDManager:TIDManager;
-       fMaxCullObjectID:TpvUInt32;
+       fMeshObjectIDLock:TPasMPSlimReaderWriterLock;
+       fMeshObjectIDManager:TIDManager;
+       fMaxMeshObjectID:TpvUInt32;
+       fMatrixIDLock:TPasMPSlimReaderWriterLock;
+       fMatrixIDManager:TIDManager;
+       fMaxMatrixID:TpvUInt32;
+       fGlobalMatrixPairDynamicArrays:TGlobalVulkanMatrixPairDynamicArrays;
+       fGlobalMatrixPairLocks:TGlobalVulkanMatrixPairLocks;
+       fGlobalVulkanMatrixPairBuffers:TGlobalVulkanMatrixPairBuffers;
+       fDrawInfoDirtyMin:array[0..MaxInFlightFrames-1] of TpvSizeInt;
+       fDrawInfoDirtyMax:array[0..MaxInFlightFrames-1] of TpvSizeInt;
+       fMatrixPairDirtyMin:array[0..MaxInFlightFrames-1] of TpvSizeInt;
+       fMatrixPairDirtyMax:array[0..MaxInFlightFrames-1] of TpvSizeInt;
+       fDrawInfoBufferResized:array[0..MaxInFlightFrames-1] of boolean;
+       fMatrixPairBufferResized:array[0..MaxInFlightFrames-1] of boolean;
+       fDrawInfoMappedBasePointers:array[0..MaxInFlightFrames-1] of Pointer;
+       fMatrixPairMappedBasePointers:array[0..MaxInFlightFrames-1] of Pointer;
+       fDrawInfoMappedBufferCounts:array[0..MaxInFlightFrames-1] of TpvSizeInt;
+       fMatrixPairMappedBufferCounts:array[0..MaxInFlightFrames-1] of TpvSizeInt;
+       fDrawInfoMapping:Boolean;
+       fMatrixPairMapping:Boolean;
+       fGlobalLODInfoDynamicArray:TGlobalLODInfoDynamicArray;
+       fGlobalLODInfoBuffer:TpvVulkanBuffer;
+       fLODInfoGeneration:TpvUInt64;
+       fLODInfoDataGeneration:TpvUInt64;
+       fLODInfoIDManager:TIDManager;
+       fLODInfoIDManagerLock:TPasMPSlimReaderWriterLock;
+       fGlobalLODNeededBuffers:array[0..MaxInFlightFrames-1] of TpvVulkanBuffer;
+       fGlobalLODNeededBufferSize:TVkDeviceSize;
+       fGPULODEnabled:boolean;
+       fLODTransformAllLevels:boolean;
+       fLODFrameCounter:TpvSizeInt;
        fImageListLock:TPasMPCriticalSection;
        fImages:TImages;
        fImageIDManager:TIDManager;
@@ -4279,7 +4339,6 @@ type EpvScene3D=class(Exception);
        fPrimaryShadowMapLightDirections:TInFlightFrameVector3s;
        fDebugPrimitiveVertexDynamicArrays:TpvScene3D.TDebugPrimitiveVertexDynamicArrays;
        fVulkanDebugPrimitiveVertexBuffers:array[0..MaxInFlightFrames-1] of TpvVulkanBuffer;
-       fOnNodeFilter:TpvScene3D.TGroup.TInstance.TOnNodeFilter;
        fParticles:TParticles;
        fPointerToParticles:PParticles;
        fParticleAliveBitmap:TParticleAliveBitmap;
@@ -4517,6 +4576,14 @@ type EpvScene3D=class(Exception);
        procedure InterpolateAnimationStates(const aAlpha:TpvDouble);
        procedure ResetSurface;
        procedure ResetFrame(const aInFlightFrameIndex:TpvSizeInt);
+       procedure FillDrawInfos(const aInFlightFrameIndex:TpvSizeInt);
+       procedure EnsureDrawInfoCapacity(const aInFlightFrameIndex:TpvSizeInt;const aMinCount:TpvSizeInt;const aAlreadyReadLocked:Boolean=false);
+       procedure EnsureMatrixPairCapacity(const aInFlightFrameIndex:TpvSizeInt;const aMinCount:TpvSizeInt;const aAlreadyReadLocked:Boolean=false);
+       procedure MarkDrawInfoDirty(const aInFlightFrameIndex:TpvSizeInt;const aIndex:TpvSizeInt);
+       procedure MarkDrawInfoDirtyRange(const aInFlightFrameIndex:TpvSizeInt;const aMinIndex,aMaxIndex:TpvSizeInt);
+       procedure MarkMatrixPairDirty(const aInFlightFrameIndex:TpvSizeInt;const aIndex:TpvSizeInt);
+       procedure MarkAllDrawInfoDirty(const aInFlightFrameIndex:TpvSizeInt);
+       procedure MarkAllMatrixPairDirty(const aInFlightFrameIndex:TpvSizeInt);
        procedure Check(const aInFlightFrameIndex:TpvSizeInt);
        procedure Update(const aInFlightFrameIndex:TpvSizeInt);
        procedure DumpUpdateProfilingTimes;
@@ -4700,7 +4767,7 @@ type EpvScene3D=class(Exception);
        property VulkanStagingCommandBuffer:TpvVulkanCommandBuffer read fVulkanStagingCommandBuffer;
        property VulkanStagingFence:TpvVulkanFence read fVulkanStagingFence;
       public
-       property MaxCullObjectID:TpvUInt32 read fMaxCullObjectID;
+       property MaxMeshObjectID:TpvUInt32 read fMaxMeshObjectID;
       public
        property UpdateCulling:TpvScene3D.TUpdateCulling read fUpdateCulling;
       public
@@ -4724,8 +4791,8 @@ type EpvScene3D=class(Exception);
        property Atmospheres:TObject read fAtmospheres;
        property AtmosphereGlobals:TObject read fAtmosphereGlobals;
       public
-       property GlobalVulkanInstanceCounts:TGlobalVulkanInstanceCounts read fGlobalVulkanInstanceCounts write fGlobalVulkanInstanceCounts;
-       property GlobalRenderInstanceCullDataDynamicArrays:TGlobalRenderInstanceCullDataDynamicArrays read fGlobalRenderInstanceCullDataDynamicArrays;
+       property GlobalVulkanDrawInfoDynamicArrays:TGlobalVulkanDrawInfoDynamicArrays read fGlobalVulkanDrawInfoDynamicArrays;
+       property GlobalVulkanDrawInfoLocks:TGlobalVulkanDrawInfoLocks read fGlobalVulkanDrawInfoLocks;
       public
        property LastProcessFrameTimerQueryResults:TpvTimerQuery.TResults read fLastProcessFrameTimerQueryResults;
       public
@@ -4805,7 +4872,6 @@ type EpvScene3D=class(Exception);
        property RaytracingActive:Boolean read fRaytracingActive;
        property PlanetSingleBuffers:Boolean read fPlanetSingleBuffers write fPlanetSingleBuffers;
        property AccelerationStructureInputBufferUsageFlags:TVkBufferUsageFlags read fAccelerationStructureInputBufferUsageFlags;
-       property OnNodeFilter:TpvScene3D.TGroup.TInstance.TOnNodeFilter read fOnNodeFilter write fOnNodeFilter;
        property PasMPInstance:TPasMP read fPasMPInstance write fPasMPInstance;
        property UseOwnPasMPInstance:Boolean read fUseOwnPasMPInstance write fUseOwnPasMPInstance;
        property LoadGLTFTimeDuration:TpvDouble read fLoadGLTFTimeDuration;
@@ -4813,6 +4879,9 @@ type EpvScene3D=class(Exception);
        property TimeRebuildDirectedAcyclicGraph:TpvDouble read fTimeRebuildDirectedAcyclicGraph;
        property TimeProcessDirectedAcyclicGraph:TpvDouble read fTimeProcessDirectedAcyclicGraph;
        property ProceduralTextureImageHookStringHashMap:TProceduralTextureImageHookStringHashMap read fProceduralTextureImageHookStringHashMap;
+       property GPULODEnabled:boolean read fGPULODEnabled write fGPULODEnabled;
+       property LODTransformAllLevels:boolean read fLODTransformAllLevels write fLODTransformAllLevels;
+       property LODFrameCounter:TpvSizeInt read fLODFrameCounter;
      end;
 
 function Matrix4x4ToGPUDrawInfoMatrix(const aMatrix:TpvMatrix4x4):TpvScene3D.TGPUDrawInfoMatrix; {$ifdef CAN_INLINE}inline;{$endif}
@@ -11110,7 +11179,7 @@ begin
      if (fManualIndex+1)<fSceneInstance.fManualLights.Count then begin
       OtherLight:=fSceneInstance.fManualLights[fSceneInstance.fManualLights.Count-1];
       OtherLight.fManualIndex:=fManualIndex;
-      fSceneInstance.fManualLights[fIndex]:=OtherLight;
+      fSceneInstance.fManualLights[fManualIndex]:=OtherLight;
       fManualIndex:=fSceneInstance.fManualLights.Count-1;
      end;
      fSceneInstance.fManualLights.Extract(fManualIndex);
@@ -12043,6 +12112,7 @@ end;
 constructor TpvScene3D.TDrawChoreographyBatchItem.Create;
 begin
  inherited Create;
+ fLODInfoIndex:=TpvUInt32($ffffffff);
 end;
 
 function TpvScene3D.TDrawChoreographyBatchItem.Clone:TDrawChoreographyBatchItem;
@@ -12059,6 +12129,7 @@ begin
  result.fMeshPrimitive:=fMeshPrimitive;
  result.fStartIndex:=fStartIndex;
  result.fCountIndices:=fCountIndices;
+ result.fLODInfoIndex:=fLODInfoIndex;
 end;
 
 class function TpvScene3D.TDrawChoreographyBatchItem.CompareTo(const aCurrent,aOther:TpvScene3D.TDrawChoreographyBatchItem):TpvInt32;
@@ -12130,7 +12201,7 @@ begin
    end;
   end;
 
-  fObjectIndex:=StreamIO.ReadUInt32;
+  fMeshObjectID:=StreamIO.ReadUInt32;
 
   Index:=StreamIO.ReadInt64;
   if (Index>=0) and (Index<fGroup.fMeshes.Count) then begin
@@ -12144,6 +12215,36 @@ begin
   fStartIndex:=StreamIO.ReadInt64;
 
   fCountIndices:=StreamIO.ReadInt64;
+
+  if StreamIO.ReadBoolean then begin
+   fGroup.fSceneInstance.fLODInfoIDManagerLock.Acquire;
+   try
+    fLODInfoIndex:=fGroup.fSceneInstance.fLODInfoIDManager.AllocateID;
+   finally
+    fGroup.fSceneInstance.fLODInfoIDManagerLock.Release;
+   end;
+   if fLODInfoIndex>=TpvUInt32(fGroup.fSceneInstance.fGlobalLODInfoDynamicArray.Count) then begin
+    fGroup.fSceneInstance.fGlobalLODInfoDynamicArray.Resize(fLODInfoIndex+1);
+    fGroup.fSceneInstance.fGlobalLODInfoDynamicArray.Count:=fLODInfoIndex+1;
+   end;
+   FillChar(fGroup.fSceneInstance.fGlobalLODInfoDynamicArray.ItemArray[fLODInfoIndex],SizeOf(TGPULODInfo),0);
+   fGroup.fSceneInstance.fGlobalLODInfoDynamicArray.ItemArray[fLODInfoIndex].CountLODs:=StreamIO.ReadUInt32;
+   for Index:=0 to 3 do begin
+    fGroup.fSceneInstance.fGlobalLODInfoDynamicArray.ItemArray[fLODInfoIndex].Thresholds[Index]:=StreamIO.ReadFloat;
+   end;
+   for Index:=0 to 3 do begin
+    fGroup.fSceneInstance.fGlobalLODInfoDynamicArray.ItemArray[fLODInfoIndex].FirstIndices[Index]:=StreamIO.ReadUInt32;
+   end;
+   for Index:=0 to 3 do begin
+    fGroup.fSceneInstance.fGlobalLODInfoDynamicArray.ItemArray[fLODInfoIndex].CountIndices[Index]:=StreamIO.ReadUInt32;
+   end;
+   for Index:=0 to 3 do begin
+    fGroup.fSceneInstance.fGlobalLODInfoDynamicArray.ItemArray[fLODInfoIndex].FirstVertices[Index]:=TpvInt32(StreamIO.ReadInt32);
+   end;
+   TPasMPInterlocked.Increment(fGroup.fSceneInstance.fLODInfoGeneration);
+  end else begin
+   fLODInfoIndex:=TpvUInt32($ffffffff);
+  end;
 
  finally
   FreeAndNil(StreamIO);
@@ -12182,7 +12283,7 @@ begin
   end;
   StreamIO.WriteInt64(Index);
 
-  StreamIO.WriteUInt32(fObjectIndex);
+  StreamIO.WriteUInt32(fMeshObjectID);
 
   if assigned(fMesh) then begin
    Index:=TpvScene3D.TGroup.TMesh(fMesh).fIndex;
@@ -12199,6 +12300,25 @@ begin
   StreamIO.WriteInt64(fStartIndex);
 
   StreamIO.WriteInt64(fCountIndices);
+
+  if fLODInfoIndex<>TpvUInt32($ffffffff) then begin
+   StreamIO.WriteBoolean(true);
+   StreamIO.WriteUInt32(fGroup.fSceneInstance.fGlobalLODInfoDynamicArray.ItemArray[fLODInfoIndex].CountLODs);
+   for Index:=0 to 3 do begin
+    StreamIO.WriteFloat(fGroup.fSceneInstance.fGlobalLODInfoDynamicArray.ItemArray[fLODInfoIndex].Thresholds[Index]);
+   end;
+   for Index:=0 to 3 do begin
+    StreamIO.WriteUInt32(fGroup.fSceneInstance.fGlobalLODInfoDynamicArray.ItemArray[fLODInfoIndex].FirstIndices[Index]);
+   end;
+   for Index:=0 to 3 do begin
+    StreamIO.WriteUInt32(fGroup.fSceneInstance.fGlobalLODInfoDynamicArray.ItemArray[fLODInfoIndex].CountIndices[Index]);
+   end;
+   for Index:=0 to 3 do begin
+    StreamIO.WriteInt32(fGroup.fSceneInstance.fGlobalLODInfoDynamicArray.ItemArray[fLODInfoIndex].FirstVertices[Index]);
+   end;
+  end else begin
+   StreamIO.WriteBoolean(false);
+  end;
 
  finally
   FreeAndNil(StreamIO);
@@ -12217,9 +12337,9 @@ begin
    NewDrawChoreographyBatchItem.fGroupInstance:=aGroupInstance;
    if assigned(aGroupInstance) then begin
     if assigned(DrawChoreographyBatchItem.Node) then begin
-     NewDrawChoreographyBatchItem.fObjectIndex:=TpvScene3D.TGroup.TInstance(aGroupInstance).Nodes[TpvScene3D.TGroup.TNode(DrawChoreographyBatchItem.Node).fIndex].fCullObjectID;
+     NewDrawChoreographyBatchItem.fMeshObjectID:=TpvScene3D.TGroup.TInstance(aGroupInstance).Nodes[TpvScene3D.TGroup.TNode(DrawChoreographyBatchItem.Node).fIndex].fMeshObjectID;
     end else begin
-     NewDrawChoreographyBatchItem.fObjectIndex:=0;
+     NewDrawChoreographyBatchItem.fMeshObjectID:=0;
     end;
     if aIsUnique then begin
      inc(NewDrawChoreographyBatchItem.fStartIndex,TpvScene3D.TGroup.TInstance(aGroupInstance).fBufferRanges.VulkanDrawUniqueIndexBufferRange.Offset);
@@ -12243,9 +12363,9 @@ begin
   NewDrawChoreographyBatchItem.fGroupInstance:=aGroupInstance;
   if assigned(aGroupInstance) then begin
    if assigned(DrawChoreographyBatchItem.Node) then begin
-    NewDrawChoreographyBatchItem.fObjectIndex:=TpvScene3D.TGroup.TInstance(aGroupInstance).Nodes[TpvScene3D.TGroup.TNode(DrawChoreographyBatchItem.Node).fIndex].fCullObjectID;
+    NewDrawChoreographyBatchItem.fMeshObjectID:=TpvScene3D.TGroup.TInstance(aGroupInstance).Nodes[TpvScene3D.TGroup.TNode(DrawChoreographyBatchItem.Node).fIndex].fMeshObjectID;
    end else begin
-    NewDrawChoreographyBatchItem.fObjectIndex:=0;
+    NewDrawChoreographyBatchItem.fMeshObjectID:=0;
    end;
    if aIsUnique then begin
     inc(NewDrawChoreographyBatchItem.fStartIndex,TpvScene3D.TGroup.TInstance(aGroupInstance).fBufferRanges.VulkanDrawUniqueIndexBufferRange.Offset);
@@ -18208,8 +18328,6 @@ begin
 
  fCameraNodeIndices:=TpvScene3D.TGroup.TCameraNodeIndices.Create;
 
- fOnNodeFilter:=nil;
-
  fRaytracingMask:=$ff;
 
  fCastingShadows:=true;
@@ -18238,7 +18356,7 @@ begin
 end;
 
 destructor TpvScene3D.TGroup.Destroy;
-var InFlightFrameIndex:TpvInt32;
+var InFlightFrameIndex,DrawChoreographyBatchItemIndex:TpvInt32;
     Material:TpvScene3D.TMaterial;
 begin
 
@@ -18270,6 +18388,21 @@ begin
  end;
 
  FreeAndNil(fUsedVisibleDrawNodes);
+
+ if assigned(fDrawChoreographyBatchItems) then begin
+  fSceneInstance.fLODInfoIDManagerLock.Acquire;
+  try
+   for DrawChoreographyBatchItemIndex:=0 to fDrawChoreographyBatchItems.Count-1 do begin
+    if fDrawChoreographyBatchItems[DrawChoreographyBatchItemIndex].fLODInfoIndex<>TpvUInt32($ffffffff) then begin
+     fSceneInstance.fLODInfoIDManager.FreeID(fDrawChoreographyBatchItems[DrawChoreographyBatchItemIndex].fLODInfoIndex);
+     fDrawChoreographyBatchItems[DrawChoreographyBatchItemIndex].fLODInfoIndex:=TpvUInt32($ffffffff);
+    end;
+   end;
+  finally
+   fSceneInstance.fLODInfoIDManagerLock.Release;
+  end;
+  TPasMPInterlocked.Increment(fSceneInstance.fLODInfoGeneration);
+ end;
 
  FreeAndNil(fDrawChoreographyBatchItems);
 
@@ -19228,6 +19361,25 @@ begin
  end;
 end;
 
+procedure TpvScene3D.TGroup.CollectMeshNodeIndices;
+var Index,Count:TpvSizeInt;
+begin
+ Count:=0;
+ for Index:=0 to fNodes.Count-1 do begin
+  if assigned(fNodes[Index].fMesh) then begin
+   inc(Count);
+  end;
+ end;
+ SetLength(fMeshNodeIndices,Count);
+ Count:=0;
+ for Index:=0 to fNodes.Count-1 do begin
+  if assigned(fNodes[Index].fMesh) then begin
+   fMeshNodeIndices[Count]:=Index;
+   inc(Count);
+  end;
+ end;
+end;
+
 procedure TpvScene3D.TGroup.CollectUsedVisibleDrawNodes;
 type TNodeStack=TpvDynamicStack<TpvScene3D.TGroup.TNode>;
      TNodeHashMap=TpvHashMap<TpvScene3D.TGroup.TNode,boolean>;
@@ -19641,6 +19793,194 @@ begin
 
 end;
 
+procedure TpvScene3D.TGroup.CollectLODData;
+var DrawChoreographyBatchItemIndex,OtherIndex,LODLevel,LODCount:TpvSizeInt;
+    NodeLODCount,MaterialLODCount,EffectiveLODCount:TpvSizeInt;
+    DrawChoreographyBatchItem,VariantBatchItem,SourceBatchItem:TDrawChoreographyBatchItem;
+    Node,VariantNode,SourceNode:TpvScene3D.TGroup.TNode;
+    LODInfoIndex:TpvUInt32;
+    LODInfo:PGPULODInfo;
+    LODNodeIndex:TpvSizeInt;
+    Material,LODMaterial:TpvScene3D.TMaterial;
+    MaterialLODIndex:TpvSizeInt;
+    SourceMesh:TpvScene3D.TGroup.TMesh;
+    SourcePrimitive:TpvScene3D.TGroup.TMesh.TPrimitive;
+    SourceNodeMeshPrimitiveInstance:TpvScene3D.TGroup.TMesh.TPrimitive.TNodeMeshPrimitiveInstance;
+    SourceStartVertex,ClonedStartVertex,VertexIndex:TpvSizeInt;
+    SourceCountVertices:TpvSizeUInt;
+    NewMaterialID:TpvUInt32;
+    NeedClone:boolean;
+    Vertex:TpvScene3D.PVertex;
+    LODFirstVertices,LODCountVertices:array[0..3] of TpvSizeUInt; 
+begin
+ for DrawChoreographyBatchItemIndex:=0 to fDrawChoreographyBatchItems.Count-1 do begin
+  DrawChoreographyBatchItem:=fDrawChoreographyBatchItems[DrawChoreographyBatchItemIndex];
+  Node:=TpvScene3D.TGroup.TNode(DrawChoreographyBatchItem.fNode);
+  if assigned(Node) then begin
+   Material:=DrawChoreographyBatchItem.fMaterial;
+   NodeLODCount:=Node.fLODNodeIndices.Count;
+   MaterialLODCount:=0;
+   if assigned(Material) then begin
+    MaterialLODCount:=Material.fLODMaterialIndices.Count;
+   end;
+   if (NodeLODCount>0) or (MaterialLODCount>0) then begin
+    EffectiveLODCount:=NodeLODCount;
+    if MaterialLODCount>EffectiveLODCount then begin
+     EffectiveLODCount:=MaterialLODCount;
+    end;
+    fSceneInstance.fLODInfoIDManagerLock.Acquire;
+    try
+     LODInfoIndex:=fSceneInstance.fLODInfoIDManager.AllocateID;
+    finally
+     fSceneInstance.fLODInfoIDManagerLock.Release;
+    end;
+    if LODInfoIndex>=TpvUInt32(fSceneInstance.fGlobalLODInfoDynamicArray.Count) then begin
+     fSceneInstance.fGlobalLODInfoDynamicArray.Resize(LODInfoIndex+1);
+     fSceneInstance.fGlobalLODInfoDynamicArray.Count:=LODInfoIndex+1;
+    end;
+    LODInfo:=@fSceneInstance.fGlobalLODInfoDynamicArray.ItemArray[LODInfoIndex];
+    FillChar(LODInfo^,SizeOf(TGPULODInfo),0);
+    LODCount:=Min(EffectiveLODCount+1,4);
+    LODInfo^.CountLODs:=LODCount;
+    LODInfo^.FirstIndices[0]:=DrawChoreographyBatchItem.fStartIndex;
+    LODInfo^.CountIndices[0]:=DrawChoreographyBatchItem.fCountIndices;
+    LODInfo^.FirstVertices[0]:=0;
+    LODFirstVertices[0]:=0;
+    LODCountVertices[0]:=0;
+    SourceNode:=TpvScene3D.TGroup.TNode(DrawChoreographyBatchItem.fNode);
+    SourceMesh:=TpvScene3D.TGroup.TMesh(DrawChoreographyBatchItem.fMesh);
+    if assigned(SourceNode) and assigned(SourceMesh) and
+       (DrawChoreographyBatchItem.fMeshPrimitive>=0) and
+       (DrawChoreographyBatchItem.fMeshPrimitive<SourceMesh.fPrimitives.Count) then begin
+     SourcePrimitive:=SourceMesh.fPrimitives[DrawChoreographyBatchItem.fMeshPrimitive];
+     if assigned(SourcePrimitive) and
+        (SourceNode.fNodeMeshInstanceIndex>=0) and
+        (SourceNode.fNodeMeshInstanceIndex<SourcePrimitive.fNodeMeshPrimitiveInstances.Count) then begin
+      SourceNodeMeshPrimitiveInstance:=SourcePrimitive.fNodeMeshPrimitiveInstances[SourceNode.fNodeMeshInstanceIndex];
+      LODFirstVertices[0]:=SourceNodeMeshPrimitiveInstance.fStartBufferVertexOffset;
+      LODCountVertices[0]:=SourcePrimitive.fCountVertices;
+     end;
+    end;
+    for LODLevel:=1 to 3 do begin
+     LODFirstVertices[LODLevel]:=0;
+     LODCountVertices[LODLevel]:=0;
+    end;
+    if Length(Node.fLODScreenCoverages)>0 then begin
+     for LODLevel:=0 to Min(Length(Node.fLODScreenCoverages),4)-1 do begin
+      LODInfo^.Thresholds[LODLevel]:=Node.fLODScreenCoverages[LODLevel];
+     end;
+    end else begin
+     for LODLevel:=0 to LODCount-2 do begin
+      LODInfo^.Thresholds[LODLevel]:=0.5/TpvFloat(TpvSizeInt(1) shl (LODLevel+1));
+     end;
+    end;
+    for LODLevel:=1 to LODCount-1 do begin
+     SourceBatchItem:=nil;
+     if (LODLevel<=NodeLODCount) then begin
+      LODNodeIndex:=Node.fLODNodeIndices[LODLevel-1];
+      if (LODNodeIndex>=0) and (LODNodeIndex<fNodes.Count) then begin
+       VariantNode:=fNodes[LODNodeIndex];
+       for OtherIndex:=0 to fDrawChoreographyBatchItems.Count-1 do begin
+        VariantBatchItem:=fDrawChoreographyBatchItems[OtherIndex];
+        if (TpvScene3D.TGroup.TNode(VariantBatchItem.fNode)=VariantNode) and
+           (VariantBatchItem.fMeshPrimitive=DrawChoreographyBatchItem.fMeshPrimitive) then begin
+         SourceBatchItem:=VariantBatchItem;
+         break;
+        end;
+       end;
+      end;
+     end;
+     if not assigned(SourceBatchItem) then begin
+      SourceBatchItem:=DrawChoreographyBatchItem;
+     end;
+     LODMaterial:=nil;
+     NeedClone:=false;
+     if (LODLevel<=MaterialLODCount) and assigned(Material) then begin
+      MaterialLODIndex:=Material.fLODMaterialIndices.ItemArray[LODLevel-1];
+      if (MaterialLODIndex>=0) and (MaterialLODIndex<fMaterials.Count) then begin
+       LODMaterial:=TpvScene3D.TMaterial(fMaterials[MaterialLODIndex]);
+       NeedClone:=true;
+      end;
+     end;
+     if NeedClone and assigned(LODMaterial) then begin
+      SourceNode:=TpvScene3D.TGroup.TNode(SourceBatchItem.fNode);
+      SourceMesh:=TpvScene3D.TGroup.TMesh(SourceBatchItem.fMesh);
+      if assigned(SourceNode) and assigned(SourceMesh) and
+         (SourceBatchItem.fMeshPrimitive>=0) and
+         (SourceBatchItem.fMeshPrimitive<SourceMesh.fPrimitives.Count) then begin
+       SourcePrimitive:=SourceMesh.fPrimitives[SourceBatchItem.fMeshPrimitive];
+       if assigned(SourcePrimitive) and
+          (SourceNode.fNodeMeshInstanceIndex>=0) and
+          (SourceNode.fNodeMeshInstanceIndex<SourcePrimitive.fNodeMeshPrimitiveInstances.Count) then begin
+        SourceNodeMeshPrimitiveInstance:=SourcePrimitive.fNodeMeshPrimitiveInstances[SourceNode.fNodeMeshInstanceIndex];
+        SourceStartVertex:=SourceNodeMeshPrimitiveInstance.fStartBufferVertexOffset;
+        SourceCountVertices:=SourcePrimitive.fCountVertices;
+        if fMaterialIndexHashMap.TryGet(LODMaterial,MaterialLODIndex) then begin
+         NewMaterialID:=MaterialLODIndex+1;
+        end else begin
+         NewMaterialID:=0;
+        end;
+        ClonedStartVertex:=fVertices.Count;
+        fVertices.Resize(ClonedStartVertex+TpvSizeInt(SourceCountVertices));
+        fVertices.Count:=ClonedStartVertex+TpvSizeInt(SourceCountVertices);
+        Move(fVertices.ItemArray[SourceStartVertex],
+             fVertices.ItemArray[ClonedStartVertex],
+             TpvSizeInt(SourceCountVertices)*SizeOf(TpvScene3D.TVertex));
+        for VertexIndex:=ClonedStartVertex to (ClonedStartVertex+TpvSizeInt(SourceCountVertices))-1 do begin
+         fVertices.ItemArray[VertexIndex].MaterialID:=NewMaterialID;
+        end;
+        LODInfo^.FirstIndices[LODLevel]:=SourceBatchItem.fStartIndex;
+        LODInfo^.CountIndices[LODLevel]:=SourceBatchItem.fCountIndices;
+        LODInfo^.FirstVertices[LODLevel]:=TpvInt32(ClonedStartVertex-SourceStartVertex);
+        LODFirstVertices[LODLevel]:=ClonedStartVertex;
+        LODCountVertices[LODLevel]:=SourceCountVertices;
+       end else begin
+        LODInfo^.FirstIndices[LODLevel]:=SourceBatchItem.fStartIndex;
+        LODInfo^.CountIndices[LODLevel]:=SourceBatchItem.fCountIndices;
+        LODInfo^.FirstVertices[LODLevel]:=0;
+        if assigned(SourceNodeMeshPrimitiveInstance) and assigned(SourcePrimitive) then begin
+         LODFirstVertices[LODLevel]:=SourceNodeMeshPrimitiveInstance.fStartBufferVertexOffset;
+         LODCountVertices[LODLevel]:=SourcePrimitive.fCountVertices;
+        end; 
+       end;
+      end else begin
+       LODInfo^.CountIndices[LODLevel]:=0;
+      end;
+     end else begin
+      LODInfo^.FirstIndices[LODLevel]:=SourceBatchItem.fStartIndex;
+      LODInfo^.CountIndices[LODLevel]:=SourceBatchItem.fCountIndices;
+      LODInfo^.FirstVertices[LODLevel]:=0;
+      SourceNode:=TpvScene3D.TGroup.TNode(SourceBatchItem.fNode);
+      SourceMesh:=TpvScene3D.TGroup.TMesh(SourceBatchItem.fMesh);
+      if assigned(SourceNode) and assigned(SourceMesh) and
+         (SourceBatchItem.fMeshPrimitive>=0) and
+         (SourceBatchItem.fMeshPrimitive<SourceMesh.fPrimitives.Count) then begin
+       SourcePrimitive:=SourceMesh.fPrimitives[SourceBatchItem.fMeshPrimitive];
+       if assigned(SourcePrimitive) and
+          (SourceNode.fNodeMeshInstanceIndex>=0) and
+          (SourceNode.fNodeMeshInstanceIndex<SourcePrimitive.fNodeMeshPrimitiveInstances.Count) then begin
+        SourceNodeMeshPrimitiveInstance:=SourcePrimitive.fNodeMeshPrimitiveInstances[SourceNode.fNodeMeshInstanceIndex];
+        LODFirstVertices[LODLevel]:=SourceNodeMeshPrimitiveInstance.fStartBufferVertexOffset;
+        LODCountVertices[LODLevel]:=SourcePrimitive.fCountVertices;
+       end;
+      end;
+     end;
+    end;
+    DrawChoreographyBatchItem.fLODInfoIndex:=LODInfoIndex;
+    // Mark all LOD level vertices with bit 1 (has LOD data) so mesh.comp can skip non-LOD vertices
+    for LODLevel:=0 to LODCount-1 do begin
+     if LODCountVertices[LODLevel]>0 then begin
+      for VertexIndex:=LODFirstVertices[LODLevel] to (LODFirstVertices[LODLevel]+LODCountVertices[LODLevel])-1 do begin
+       fVertices.ItemArray[VertexIndex].Flags:=fVertices.ItemArray[VertexIndex].Flags or (1 shl 1);
+      end;
+     end;
+    end;
+    TPasMPInterlocked.Increment(fSceneInstance.fLODInfoGeneration);
+   end; 
+  end;
+ end;
+end;
+
 procedure TpvScene3D.TGroup.ConstructSkipLists;
 var Scene:TpvScene3D.TGroup.TScene;
 begin
@@ -19815,11 +20155,15 @@ begin
 
   CollectUsedVisibleDrawNodes;
 
+  CollectMeshNodeIndices;
+
   CollectMaterials;
 
   CollectNodeUsedJoints;
 
   ConstructDrawChoreographyBatchItems;
+
+  CollectLODData;
 
   ConstructSkipLists;
 
@@ -20867,9 +21211,11 @@ begin
 
  ConstructBuffers;
 
- CollectUsedVisibleDrawNodes;
+ CollectUsedVisibleDrawNodes;}
 
- CollectMaterials;
+ CollectMeshNodeIndices;
+
+{CollectMaterials;
 
  CollectNodeUsedJoints;}
 
@@ -23935,6 +24281,7 @@ begin
  finally
   fGroup.fSceneInstance.fGlobalBoundingSphereIndexIDManagerLock.Release;
  end;
+ fActiveRenderPasses:=TpvScene3DRendererAllRenderPasses;
 end;
 
 destructor TpvScene3D.TGroup.TInstance.TNode.Destroy;
@@ -23946,6 +24293,14 @@ begin
   fGroup.fSceneInstance.fGlobalBoundingSphereIndexIDManagerLock.Release;
  end;
  inherited Destroy;
+end;
+
+procedure TpvScene3D.TGroup.TInstance.TNode.SetActiveRenderPasses(const aActiveRenderPasses:TpvScene3DRendererRenderPasses);
+begin
+ if fActiveRenderPasses<>aActiveRenderPasses then begin
+  fActiveRenderPasses:=aActiveRenderPasses;
+  TPasMPInterlocked.Increment(fGroupInstance.fActiveRenderPassesGeneration);
+ end;
 end;
 
 function TpvScene3D.TGroup.TInstance.TNode.InverseFrontFaces:boolean;
@@ -24914,9 +25269,12 @@ end;
 { TpvScene3D.TGroup.TInstance.TRenderInstance }
 
 constructor TpvScene3D.TGroup.TInstance.TRenderInstance.Create(const aInstance:TpvScene3D.TGroup.TInstance);
-var Index:TpvSizeInt;
+var Index,InFlightFrameIndex:TpvSizeInt;
     Light:TpvScene3D.TLight;
-    NodeCullObjectID:TpvUInt32;
+    NodeMeshObjectID:TpvUInt32;
+    RenderPassMask:TpvUInt32;
+    CurrentDrawInfo:PGPUDrawInfo;
+    CurrentMatrixPair:PGPUMatrixPair;
 begin
 
  inherited Create;
@@ -24946,6 +25304,8 @@ begin
   fModelMatrices[Index]:=TpvMatrix4x4.Identity;
   fInstanceDataIndices[Index]:=0;
   fGenerations[Index]:=0;
+  fDrawInfoGenerations[Index]:=High(TpvUInt64);
+  fActiveRenderPassesGenerations[Index]:=High(TpvUInt64);
  end;
 
  fGeneration:=0;
@@ -24973,25 +25333,68 @@ begin
   fLights:=nil;
  end;
 
- fNodeCullObjectIDs:=nil;
+ fNodeMeshObjectIDs:=nil;
 
- SetLength(fNodeCullObjectIDs,fInstance.fGroup.fNodes.Count);
+ SetLength(fNodeMeshObjectIDs,fInstance.fGroup.fNodes.Count);
 
- fSceneInstance.fCullObjectIDLock.Acquire;
+ fSceneInstance.fMeshObjectIDLock.Acquire;
  try
   for Index:=0 to fInstance.fGroup.fNodes.Count-1 do begin
    if assigned(fInstance.fGroup.fNodes[Index].Mesh) then begin
-    NodeCullObjectID:=fSceneInstance.fCullObjectIDManager.AllocateID;
-    if fSceneInstance.fMaxCullObjectID<NodeCullObjectID then begin
-     fSceneInstance.fMaxCullObjectID:=NodeCullObjectID;
+    NodeMeshObjectID:=fSceneInstance.fMeshObjectIDManager.AllocateID;
+    if fSceneInstance.fMaxMeshObjectID<NodeMeshObjectID then begin
+     fSceneInstance.fMaxMeshObjectID:=NodeMeshObjectID;
     end;
    end else begin
-    NodeCullObjectID:=0;
+    NodeMeshObjectID:=0;
    end;
-   fNodeCullObjectIDs[Index]:=NodeCullObjectID;
+   fNodeMeshObjectIDs[Index]:=NodeMeshObjectID;
   end;
  finally
-  fSceneInstance.fCullObjectIDLock.Release;
+  fSceneInstance.fMeshObjectIDLock.Release;
+ end;
+
+ fSceneInstance.fMatrixIDLock.Acquire;
+ try
+  fMatrixID:=fSceneInstance.fMatrixIDManager.AllocateID;
+  if fSceneInstance.fMaxMatrixID<fMatrixID then begin
+   fSceneInstance.fMaxMatrixID:=fMatrixID;
+  end;
+ finally
+  fSceneInstance.fMatrixIDLock.Release;
+ end;
+
+ RenderPassMask:=pvScene3DRendererRenderPassesToMask(TpvScene3DRendererAllRenderPasses);
+ for InFlightFrameIndex:=0 to fSceneInstance.fCountInFlightFrames-1 do begin
+  fSceneInstance.fGlobalVulkanDrawInfoLocks[InFlightFrameIndex].AcquireRead;
+  try
+   // Init MatrixPair to Identity for this RenderInstance
+   fSceneInstance.EnsureMatrixPairCapacity(InFlightFrameIndex,fMatrixID+1,false);
+   fSceneInstance.fGlobalMatrixPairLocks[InFlightFrameIndex].AcquireRead;
+   try
+    CurrentMatrixPair:=@fSceneInstance.fGlobalMatrixPairDynamicArrays[InFlightFrameIndex].ItemArray[fMatrixID];
+    CurrentMatrixPair^.ModelMatrix:=TpvMatrix4x4.Identity;
+    CurrentMatrixPair^.PreviousModelMatrix:=TpvMatrix4x4.Identity;
+    fSceneInstance.MarkMatrixPairDirty(InFlightFrameIndex,fMatrixID);
+   finally
+    fSceneInstance.fGlobalMatrixPairLocks[InFlightFrameIndex].ReleaseRead;
+   end;
+   for Index:=0 to fInstance.fGroup.fNodes.Count-1 do begin
+    NodeMeshObjectID:=fNodeMeshObjectIDs[Index];
+    if NodeMeshObjectID>0 then begin
+     fSceneInstance.EnsureDrawInfoCapacity(InFlightFrameIndex,NodeMeshObjectID+1,true);
+     CurrentDrawInfo:=@fSceneInstance.fGlobalVulkanDrawInfoDynamicArrays[InFlightFrameIndex].ItemArray[NodeMeshObjectID];
+     CurrentDrawInfo^.MatrixID:=fMatrixID;
+     CurrentDrawInfo^.InstanceDataIndex:=0;
+     CurrentDrawInfo^.MeshObjectID:=NodeMeshObjectID;
+     CurrentDrawInfo^.Flags:=RenderPassMask;
+     CurrentDrawInfo^.NodeMatricesIndex:=fInstance.fBufferRanges.VulkanNodeMatricesBufferRange.Offset+TpvUInt32(Index)+1;
+     fSceneInstance.MarkDrawInfoDirty(InFlightFrameIndex,NodeMeshObjectID);
+    end;
+   end;
+  finally
+   fSceneInstance.fGlobalVulkanDrawInfoLocks[InFlightFrameIndex].ReleaseRead;
+  end;
  end;
 
  fAssignedVirtualInstance:=nil;
@@ -25007,7 +25410,7 @@ end;
 destructor TpvScene3D.TGroup.TInstance.TRenderInstance.Destroy;
 var Index:TpvSizeInt;
     Light:TpvScene3D.TLight;
-    NodeCullObjectID:TpvUInt32;
+    NodeMeshObjectID:TpvUInt32;
 begin
 
  if assigned(fLights) and (length(fInstance.fLightNodes)>0) then begin
@@ -25020,21 +25423,30 @@ begin
  end;
  FreeAndNil(fLights);
 
- fSceneInstance.fCullObjectIDLock.Acquire;
+ fSceneInstance.fMeshObjectIDLock.Acquire;
  try
-  for Index:=0 to length(fNodeCullObjectIDs)-1 do begin
-   NodeCullObjectID:=fNodeCullObjectIDs[Index];
-   if NodeCullObjectID<>0 then begin
-    fSceneInstance.fCullObjectIDManager.FreeID(NodeCullObjectID);
+  for Index:=0 to length(fNodeMeshObjectIDs)-1 do begin
+   NodeMeshObjectID:=fNodeMeshObjectIDs[Index];
+   if NodeMeshObjectID<>0 then begin
+    fSceneInstance.fMeshObjectIDManager.FreeID(NodeMeshObjectID);
    end;
   end;
  finally
-  fSceneInstance.fCullObjectIDLock.Release;
+  fSceneInstance.fMeshObjectIDLock.Release;
+ end;
+
+ if fMatrixID<>0 then begin
+  fSceneInstance.fMatrixIDLock.Acquire;
+  try
+   fSceneInstance.fMatrixIDManager.FreeID(fMatrixID);
+  finally
+   fSceneInstance.fMatrixIDLock.Release;
+  end;
  end;
 
  fSceneInstance.InvalidateDirectedAcyclicGraph;
 
- fNodeCullObjectIDs:=nil;
+ fNodeMeshObjectIDs:=nil;
 
  inherited Destroy;
 end;
@@ -25062,7 +25474,7 @@ begin
 end;
 
 procedure TpvScene3D.TGroup.TInstance.TRenderInstance.BeforeDestruction;
-var LastIndex:TpvSizeInt;
+var Index,LastIndex:TpvSizeInt;
     OtherRenderInstance:TpvScene3D.TGroup.TInstance.TRenderInstance;
 begin
  if (fIndex>=0) and assigned(fInstance) then begin
@@ -25094,6 +25506,10 @@ begin
    TPasMPMultipleReaderSingleWriterSpinLock.ReleaseWrite(fInstance.fRenderInstanceLock);
   end;
  end;
+ for Index:=-1 to MaxInFlightFrames-1 do begin
+  fWorkActives[Index]:=false;
+ end;
+ fWorkActive:=false;
  inherited BeforeDestruction;
 end;
 
@@ -25364,7 +25780,7 @@ end;
 { TpvScene3D.TGroup.TInstance }
 
 constructor TpvScene3D.TGroup.TInstance.Create(const aResourceManager:TpvResourceManager;const aParent:TpvResource=nil;const aMetaResource:TpvMetaResource=nil;const aHeadless:Boolean=false;const aVirtual:Boolean=false);
-var Index,OtherIndex,MaterialIndex,MaterialIDMapArrayIndex,CountLightNodes:TpvSizeInt;
+var Index,OtherIndex,MaterialIndex,MaterialIDMapArrayIndex,CountLightNodes,InFlightFrameIndex:TpvSizeInt;
     InstanceNode:TpvScene3D.TGroup.TInstance.TNode;
     Node:TpvScene3D.TGroup.TNode;
     //MeshPrimitive:TpvScene3D.TGroup.TMesh.TPrimitive;
@@ -25375,11 +25791,14 @@ var Index,OtherIndex,MaterialIndex,MaterialIDMapArrayIndex,CountLightNodes:TpvSi
     MaterialToDuplicate,DuplicatedMaterial,Material:TpvScene3D.TMaterial;
     MaterialIDMapArray:TpvScene3D.TGroup.TMaterialIDMapArray;
     Generation:TpvUInt32;
+    MeshObjectID:TpvUInt32;
+    RenderPassMask:TpvUInt32;
     SrcVertex,DstVertex:PVertex;
     DstDynamicVertex:PGPUDynamicVertex;
     DstStaticVertex:PGPUStaticVertex;
     SrcMorphTargetVertex,DstMorphTargetVertex:PMorphTargetVertex;
     SrcJointBlock,DstJointBlock:PJointBlock;
+    CurrentDrawInfo:PGPUDrawInfo;
 begin
 
  inherited Create(aResourceManager,aParent,aMetaResource);
@@ -25466,6 +25885,11 @@ begin
 
  fDirtyCounter:=1;
 
+ fActiveRenderPassesGeneration:=0;
+ for Index:=0 to fSceneInstance.fCountInFlightFrames-1 do begin
+  fActiveRenderPassesGenerations[Index]:=High(TPasMPUInt64);
+ end;
+
  fInstanceUpdateDirtyCounter:=2;
 
  fRaytracingMask:=$ff;
@@ -25508,8 +25932,6 @@ begin
  end;
 
  fPointerToPerInFlightFrameRenderInstances:=@fPerInFlightFrameRenderInstances;
-
- FillChar(fVulkanPerInFlightFrameFirstInstances,SizeOf(fVulkanPerInFlightFrameFirstInstances),#0);
 
  FillChar(fVulkanPerInFlightFrameInstancesCounts,SizeOf(fVulkanPerInFlightFrameInstancesCounts),#0);
 
@@ -25660,22 +26082,50 @@ begin
   end;
  end;
 
- fSceneInstance.fCullObjectIDLock.Acquire;
+ fSceneInstance.fMeshObjectIDLock.Acquire;
  try
   for Index:=0 to fGroup.fNodes.Count-1 do begin
    Node:=fGroup.fNodes[Index];
    InstanceNode:=fNodes.RawItems[Index];
    if assigned(Node.Mesh) then begin
-    InstanceNode.fCullObjectID:=fSceneInstance.fCullObjectIDManager.AllocateID;
-    if fSceneInstance.fMaxCullObjectID<InstanceNode.fCullObjectID then begin
-     fSceneInstance.fMaxCullObjectID:=InstanceNode.fCullObjectID;
+    InstanceNode.fMeshObjectID:=fSceneInstance.fMeshObjectIDManager.AllocateID;
+    if fSceneInstance.fMaxMeshObjectID<InstanceNode.fMeshObjectID then begin
+     fSceneInstance.fMaxMeshObjectID:=InstanceNode.fMeshObjectID;
     end;
    end else begin
-    InstanceNode.fCullObjectID:=0;
+    InstanceNode.fMeshObjectID:=0;
    end;
   end;
  finally
-  fSceneInstance.fCullObjectIDLock.Release;
+  fSceneInstance.fMeshObjectIDLock.Release;
+ end;
+
+ begin
+  RenderPassMask:=pvScene3DRendererRenderPassesToMask(TpvScene3DRendererAllRenderPasses);
+  for InFlightFrameIndex:=0 to fSceneInstance.fCountInFlightFrames-1 do begin
+   fSceneInstance.fGlobalVulkanDrawInfoLocks[InFlightFrameIndex].AcquireRead;
+   try
+    for Index:=0 to fGroup.fNodes.Count-1 do begin
+     Node:=fGroup.fNodes[Index];
+     if assigned(Node.Mesh) then begin
+      InstanceNode:=fNodes.RawItems[Index];
+      MeshObjectID:=InstanceNode.fMeshObjectID;
+      if MeshObjectID>0 then begin
+       fSceneInstance.EnsureDrawInfoCapacity(InFlightFrameIndex,MeshObjectID+1,true);
+       CurrentDrawInfo:=@fSceneInstance.fGlobalVulkanDrawInfoDynamicArrays[InFlightFrameIndex].ItemArray[MeshObjectID];
+       CurrentDrawInfo^.MatrixID:=0; // Non-RI: Identity sentinel
+       CurrentDrawInfo^.InstanceDataIndex:=0;
+       CurrentDrawInfo^.MeshObjectID:=MeshObjectID;
+       CurrentDrawInfo^.Flags:=RenderPassMask;
+       CurrentDrawInfo^.NodeMatricesIndex:=fBufferRanges.VulkanNodeMatricesBufferRange.Offset+TpvUInt32(Index)+1;
+       fSceneInstance.MarkDrawInfoDirty(InFlightFrameIndex,MeshObjectID);
+      end;
+     end;
+    end;
+   finally
+    fSceneInstance.fGlobalVulkanDrawInfoLocks[InFlightFrameIndex].ReleaseRead;
+   end;
+  end;
  end;
 
  SetLength(fAnimations,fGroup.fAnimations.Count+1);
@@ -25733,7 +26183,7 @@ begin
 
  SetLength(fCacheVerticesNodeDirtyBitmap,((fNodes.Count+31) shr 5)+1);
 
- fOnNodeFilter:=nil;
+ fActiveRenderPasses:=TpvScene3DRendererAllRenderPasses;
 
  fOnUpdate:=nil;
 
@@ -25831,21 +26281,21 @@ begin
 
  FreeAndNil(fLights);
 
- if assigned(fSceneInstance.fCullObjectIDLock) then begin
-  fSceneInstance.fCullObjectIDLock.Acquire;
+ if assigned(fSceneInstance.fMeshObjectIDLock) then begin
+  fSceneInstance.fMeshObjectIDLock.Acquire;
   try
    for Index:=0 to fNodes.Count-1 do begin
     InstanceNode:=fNodes.RawItems[Index];
-    if InstanceNode.fCullObjectID>0 then begin
+    if InstanceNode.fMeshObjectID>0 then begin
      try
-      fSceneInstance.fCullObjectIDManager.FreeID(InstanceNode.fCullObjectID);
+      fSceneInstance.fMeshObjectIDManager.FreeID(InstanceNode.fMeshObjectID);
      finally
-      InstanceNode.fCullObjectID:=0;
+      InstanceNode.fMeshObjectID:=0;
      end;
     end;
    end;
   finally
-   fSceneInstance.fCullObjectIDLock.Release;
+   fSceneInstance.fMeshObjectIDLock.Release;
   end;
  end;
 
@@ -26018,6 +26468,14 @@ procedure TpvScene3D.TGroup.TInstance.BeforeDestruction;
 begin
  Remove;
  inherited BeforeDestruction;
+end;
+
+procedure TpvScene3D.TGroup.TInstance.SetActiveRenderPasses(const aActiveRenderPasses:TpvScene3DRendererRenderPasses);
+begin
+ if fActiveRenderPasses<>aActiveRenderPasses then begin
+  fActiveRenderPasses:=aActiveRenderPasses;
+  TPasMPInterlocked.Increment(fActiveRenderPassesGeneration);
+ end;
 end;
 
 procedure TpvScene3D.TGroup.TInstance.ConstructData(const aLock:boolean);
@@ -29111,27 +29569,7 @@ begin
   InstanceNode.NewCacheMatrixGeneration;
  end;
  InstanceNode.fCacheMatrixGenerations[aInFlightFrameIndex]:=InstanceNode.fCacheMatrixGeneration;
- if fGroup.fHasLODs and (aInFlightFrameIndex>=0) and EffectiveVisible and ((Node.fLODNodeIndices.Count>0) or assigned(Node.fMesh)) then begin
-  if aInFlightFrameIndex>0 then begin
-   PrevFrameIndex:=aInFlightFrameIndex-1;
-  end else begin
-   PrevFrameIndex:=-1;
-  end;
-  if InstanceNode.fBoundingBoxFilled[PrevFrameIndex] then begin
-   LODLevel:=SelectNodeLODLevel(Node,InstanceNode.fBoundingSpheres[PrevFrameIndex],InstanceNode.fInFlightFrameScreenCoverage[aInFlightFrameIndex]);
-  end else begin
-   LODLevel:=0;
-   InstanceNode.fInFlightFrameScreenCoverage[aInFlightFrameIndex]:=1.0;
-  end;
-  InstanceNode.fInFlightFrameActiveLODLevel[aInFlightFrameIndex]:=LODLevel;
-  if (LODLevel>0) and (Node.fLODNodeIndices.Count>0) then begin
-   InstanceNode.fInFlightFrameVisible[aInFlightFrameIndex]:=false;
-   LODNodeIndex:=Node.fLODNodeIndices[LODLevel-1];
-   if (LODNodeIndex>=0) and (LODNodeIndex<fGroup.fNodes.Count) then begin
-    ProcessNode(aInFlightFrameIndex,LODNodeIndex,Matrix,Dirty,MatrixDirty,EffectiveVisible);
-   end;
-  end;
- end else if aInFlightFrameIndex>=0 then begin
+ if aInFlightFrameIndex>=0 then begin
   InstanceNode.fInFlightFrameActiveLODLevel[aInFlightFrameIndex]:=0;
   InstanceNode.fInFlightFrameScreenCoverage[aInFlightFrameIndex]:=1.0;
  end;
@@ -29377,11 +29815,16 @@ begin
 end;
 
 procedure TpvScene3D.TGroup.TInstance.UpdateRenderInstances(const aInFlightFrameIndex:TpvSizeInt;const aInstanceUpdateDirtySkipped:Boolean);
-var Index,PerInFlightFrameRenderInstanceIndex:TpvSizeInt;
+var Index,PerInFlightFrameRenderInstanceIndex,MeshNodeArrayIndex,NodeIndex:TpvSizeInt;
     First:Boolean;
     TemporaryBoundingBox:TpvAABB;
     RenderInstance:TpvScene3D.TGroup.TInstance.TRenderInstance;
     PerInFlightFrameRenderInstance:TpvScene3D.TGroup.TInstance.PPerInFlightFrameRenderInstance;
+    MeshObjectID:TpvUInt32;
+    CurrentDrawInfo:PGPUDrawInfo;
+    DrawInfoArray:PGlobalVulkanDrawInfoDynamicArray;
+    MatrixPairArray:PGlobalVulkanMatrixPairDynamicArray;
+    CurrentMatrixPair:PGPUMatrixPair;
 {$ifdef UpdateProfilingTimes}
     StartCPUTime,EndCPUTime:TpvHighResolutionTime;
 {$endif}
@@ -29397,6 +29840,8 @@ begin
    if fRenderInstances.Count>0 then begin
     TPasMPMultipleReaderSingleWriterSpinLock.AcquireRead(fRenderInstanceLock);
     try
+     DrawInfoArray:=@fSceneInstance.fGlobalVulkanDrawInfoDynamicArrays[aInFlightFrameIndex];
+     MatrixPairArray:=@fSceneInstance.fGlobalMatrixPairDynamicArrays[aInFlightFrameIndex];
      for Index:=0 to fRenderInstances.Count-1 do begin
       RenderInstance:=fRenderInstances[Index];
       if RenderInstance.fWorkActive then begin
@@ -29424,7 +29869,7 @@ begin
         RenderInstance.fGeneration:=0;
        end else begin
         PerInFlightFrameRenderInstance^.PreviousModelMatrix:=RenderInstance.fPreviousModelMatrix;
-        // Increment generation if ModelMatrix or InstanceDataIndex changed
+        // Increment generation if ModelMatrix, InstanceDataIndex or fActiveRenderPasses changed
         if (RenderInstance.fWorkModelMatrix<>RenderInstance.fPreviousModelMatrix) or
            (RenderInstance.fInstanceDataIndices[aInFlightFrameIndex]<>RenderInstance.fInstanceDataIndex) then begin
          inc(RenderInstance.fGeneration);
@@ -29436,6 +29881,30 @@ begin
        RenderInstance.fInstanceDataIndices[aInFlightFrameIndex]:=RenderInstance.fInstanceDataIndex;
        RenderInstance.fPreviousModelMatrix:=RenderInstance.fWorkModelMatrix;
        RenderInstance.UpdateLights(aInFlightFrameIndex);
+       if (RenderInstance.fDrawInfoGenerations[aInFlightFrameIndex]<>RenderInstance.fGenerations[aInFlightFrameIndex]) or
+          (RenderInstance.fActiveRenderPassesGenerations[aInFlightFrameIndex]<>RenderInstance.fInstance.fActiveRenderPassesGenerations[aInFlightFrameIndex]) then begin
+        RenderInstance.fDrawInfoGenerations[aInFlightFrameIndex]:=RenderInstance.fGenerations[aInFlightFrameIndex];
+        RenderInstance.fActiveRenderPassesGenerations[aInFlightFrameIndex]:=RenderInstance.fInstance.fActiveRenderPassesGenerations[aInFlightFrameIndex];
+        // Write matrices to MatrixPairBuffer (once per RI, not per node)
+        fSceneInstance.EnsureMatrixPairCapacity(aInFlightFrameIndex,RenderInstance.fMatrixID+1,false);
+        CurrentMatrixPair:=@MatrixPairArray^.ItemArray[RenderInstance.fMatrixID];
+        CurrentMatrixPair^.ModelMatrix:=PerInFlightFrameRenderInstance^.ModelMatrix;
+        CurrentMatrixPair^.PreviousModelMatrix:=PerInFlightFrameRenderInstance^.PreviousModelMatrix;
+        fSceneInstance.MarkMatrixPairDirty(aInFlightFrameIndex,RenderInstance.fMatrixID);
+        for MeshNodeArrayIndex:=0 to length(fGroup.fMeshNodeIndices)-1 do begin
+         NodeIndex:=fGroup.fMeshNodeIndices[MeshNodeArrayIndex];
+         MeshObjectID:=RenderInstance.fNodeMeshObjectIDs[NodeIndex];
+         if MeshObjectID>0 then begin
+          CurrentDrawInfo:=@DrawInfoArray^.ItemArray[MeshObjectID];
+          CurrentDrawInfo^.MatrixID:=RenderInstance.fMatrixID;
+          CurrentDrawInfo^.InstanceDataIndex:=PerInFlightFrameRenderInstance^.InstanceDataIndex;
+          CurrentDrawInfo^.MeshObjectID:=MeshObjectID;
+          CurrentDrawInfo^.Flags:=pvScene3DRendererRenderPassesToMask(fActiveRenderPasses*RenderInstance.fInstance.fNodes.RawItems[NodeIndex].fActiveRenderPasses);
+          CurrentDrawInfo^.NodeMatricesIndex:=RenderInstance.fInstance.fBufferRanges.VulkanNodeMatricesBufferRange.Offset+TpvUInt32(NodeIndex)+1;
+          fSceneInstance.MarkDrawInfoDirty(aInFlightFrameIndex,MeshObjectID);
+         end;
+        end;
+       end;
       end else begin
        RenderInstance.fWorkActives[aInFlightFrameIndex]:=false;
        if fUseSortedRenderInstances and
@@ -29928,7 +30397,6 @@ begin
   InstanceNode.Update(aInFlightFrameIndex);
  end;
 
-
  RenderInstanceDirty:=fSceneInstance.fUpdatedOriginTransform;
  if fUseRenderInstances and (fRenderInstances.Count>0) and not RenderInstanceDirty then begin
   TPasMPMultipleReaderSingleWriterSpinLock.AcquireRead(fRenderInstanceLock);
@@ -29964,23 +30432,25 @@ begin
  end else begin
 
   // Copy per-InFlightFrame RenderInstance data
-  if fUseRenderInstances and (fRenderInstances.Count>0) then begin
+  if fUseRenderInstances then begin
    fPerInFlightFrameRenderInstances[aInFlightFrameIndex].Count:=0;
-   TPasMPMultipleReaderSingleWriterSpinLock.AcquireRead(fRenderInstanceLock);
-   try
-    for Index:=0 to fRenderInstances.Count-1 do begin
-     RenderInstance:=fRenderInstances[Index];
-     if RenderInstance.fWorkActive then begin
-      TPasMPInterlocked.BitwiseOr(RenderInstance.fActiveMask,TpvUInt32(1) shl aInFlightFrameIndex);
-      RenderInstance.fModelMatrices[aInFlightFrameIndex]:=RenderInstance.fModelMatrices[PreviousInFlightFrameIndex];
-      RenderInstance.fInstanceDataIndices[aInFlightFrameIndex]:=RenderInstance.fInstanceDataIndex;
-      PerInFlightFrameRenderInstance:=pointer(fPerInFlightFrameRenderInstances[aInFlightFrameIndex].AddNew);
-      PerInFlightFrameRenderInstance^.RenderInstance:=RenderInstance;
-      PerInFlightFrameRenderInstance^.BoundingBox:=RenderInstance.fBoundingBox;
+   if fRenderInstances.Count>0 then begin
+    TPasMPMultipleReaderSingleWriterSpinLock.AcquireRead(fRenderInstanceLock);
+    try
+     for Index:=0 to fRenderInstances.Count-1 do begin
+      RenderInstance:=fRenderInstances[Index];
+      if RenderInstance.fWorkActive then begin
+       TPasMPInterlocked.BitwiseOr(RenderInstance.fActiveMask,TpvUInt32(1) shl aInFlightFrameIndex);
+       RenderInstance.fModelMatrices[aInFlightFrameIndex]:=RenderInstance.fModelMatrices[PreviousInFlightFrameIndex];
+       RenderInstance.fInstanceDataIndices[aInFlightFrameIndex]:=RenderInstance.fInstanceDataIndex;
+       PerInFlightFrameRenderInstance:=pointer(fPerInFlightFrameRenderInstances[aInFlightFrameIndex].AddNew);
+       PerInFlightFrameRenderInstance^.RenderInstance:=RenderInstance;
+       PerInFlightFrameRenderInstance^.BoundingBox:=RenderInstance.fBoundingBox;
+      end;
      end;
+    finally
+     TPasMPMultipleReaderSingleWriterSpinLock.ReleaseRead(fRenderInstanceLock);
     end;
-   finally
-    TPasMPMultipleReaderSingleWriterSpinLock.ReleaseRead(fRenderInstanceLock);
    end;
   end;
 
@@ -29990,7 +30460,7 @@ end;
 {$endif}
 
 procedure TpvScene3D.TGroup.TInstance.Update(const aInFlightFrameIndex:TpvSizeInt);
-var Index:TpvSizeInt;
+var Index,MeshNodeArrayIndex,NodeIndex:TpvSizeInt;
     Scene:TpvScene3D.TGroup.TScene;
     Animation:TpvScene3D.TGroup.TInstance.TAnimation;
     RenderInstance:TpvScene3D.TGroup.TInstance.TRenderInstance;
@@ -29999,6 +30469,9 @@ var Index:TpvSizeInt;
 {$ifdef InstanceUpdateDirtySkip}
     InstanceUpdateDirtySkipped:boolean;
 {$endif}
+    MeshObjectID:TpvUInt32;
+    InstanceNode:TpvScene3D.TGroup.TInstance.TNode;
+    DrawInfoArray:PGlobalVulkanDrawInfoDynamicArray;
 begin
 
 {$ifdef InstanceUpdateDirtySkip}
@@ -30138,6 +30611,22 @@ begin
 
    UpdateRenderInstances(aInFlightFrameIndex,false);
 
+   if (aInFlightFrameIndex>=0) and not fUseRenderInstances then begin
+    if fActiveRenderPassesGenerations[aInFlightFrameIndex]<>fActiveRenderPassesGeneration then begin
+     fActiveRenderPassesGenerations[aInFlightFrameIndex]:=fActiveRenderPassesGeneration;
+     DrawInfoArray:=@fSceneInstance.fGlobalVulkanDrawInfoDynamicArrays[aInFlightFrameIndex];
+     for MeshNodeArrayIndex:=0 to length(fGroup.fMeshNodeIndices)-1 do begin
+      NodeIndex:=fGroup.fMeshNodeIndices[MeshNodeArrayIndex];
+      InstanceNode:=fNodes.RawItems[NodeIndex];
+      MeshObjectID:=InstanceNode.fMeshObjectID;
+      if MeshObjectID>0 then begin
+       DrawInfoArray^.ItemArray[MeshObjectID].Flags:=pvScene3DRendererRenderPassesToMask(fActiveRenderPasses*InstanceNode.ActiveRenderPasses);
+       fSceneInstance.MarkDrawInfoDirty(aInFlightFrameIndex,MeshObjectID);
+      end;
+     end;
+    end;
+   end;
+
    UpdateBoundingVolumes(aInFlightFrameIndex,false);
 
 {$ifdef InstanceUpdateDirtySkip}
@@ -30177,7 +30666,7 @@ end;
 {$else}
 
 procedure TpvScene3D.TGroup.TInstance.Update(const aInFlightFrameIndex:TpvSizeInt);
-var Index,OtherIndex,PerInFlightFrameRenderInstanceIndex:TpvSizeInt;
+var Index,OtherIndex,PerInFlightFrameRenderInstanceIndex,MeshNodeArrayIndex,NodeIndex:TpvSizeInt;
     WeightSum,WeightOverFactor:TpvDouble;
     Scene:TpvScene3D.TGroup.TScene;
     Animation:TpvScene3D.TGroup.TInstance.TAnimation;
@@ -30196,6 +30685,9 @@ var Index,OtherIndex,PerInFlightFrameRenderInstanceIndex:TpvSizeInt;
     InstanceUpdateDirtySkipped,RenderInstanceDirty:boolean;
     PreviousInFlightFrameIndex:TpvSizeInt;
 {$endif}
+    MeshObjectID:TpvUInt32;
+    RenderPassMask:TpvUInt32;
+    DrawInfoArray:PGlobalVulkanDrawInfoDynamicArray;
 begin
 
  if assigned(fAppendageInstance) and assigned(fAppendageNode) then begin
@@ -30679,6 +31171,23 @@ begin
 
    UpdateRenderInstances(aInFlightFrameIndex,false);
 
+   if not fUseRenderInstances then begin
+    RenderPassMask:=pvScene3DRendererRenderPassesToMask(fActiveRenderPasses);
+    if fDrawInfoRenderPassMask[aInFlightFrameIndex]<>RenderPassMask then begin
+     fDrawInfoRenderPassMask[aInFlightFrameIndex]:=RenderPassMask;
+     DrawInfoArray:=@fSceneInstance.fGlobalVulkanDrawInfoDynamicArrays[aInFlightFrameIndex];
+     for MeshNodeArrayIndex:=0 to length(fGroup.fMeshNodeIndices)-1 do begin
+      NodeIndex:=fGroup.fMeshNodeIndices[MeshNodeArrayIndex];
+      InstanceNode:=fNodes.RawItems[NodeIndex];
+      MeshObjectID:=InstanceNode.fMeshObjectID;
+      if MeshObjectID>0 then begin
+       DrawInfoArray^.ItemArray[MeshObjectID].Flags:=RenderPassMask;
+       fSceneInstance.MarkDrawInfoDirty(aInFlightFrameIndex,MeshObjectID);
+      end;
+     end;
+    end;
+   end;
+
    UpdateBoundingVolumes(aInFlightFrameIndex,false);
 
    if aInFlightFrameIndex>=0 then begin
@@ -30982,8 +31491,7 @@ end;
 
 function TpvScene3D.TGroup.TInstance.GetBakedMeshFromSplittedNode(const aNode:TpvScene3D.TGroup.TNode;
                                                                   const aRelative:boolean=false;
-                                                                  const aMaterialAlphaModes:TpvScene3D.TMaterial.TAlphaModes=[TpvScene3D.TMaterial.TAlphaMode.Opaque,TpvScene3D.TMaterial.TAlphaMode.Blend,TpvScene3D.TMaterial.TAlphaMode.Mask];
-                                                                  const aNodeFilter:TOnNodeFilter=nil):TpvScene3D.TBakedMesh;
+                                                                  const aMaterialAlphaModes:TpvScene3D.TMaterial.TAlphaModes=[TpvScene3D.TMaterial.TAlphaMode.Opaque,TpvScene3D.TMaterial.TAlphaMode.Blend,TpvScene3D.TMaterial.TAlphaMode.Mask]):TpvScene3D.TBakedMesh;
 type TNodeStack=TpvDynamicStack<TpvScene3D.TGroup.TNode>;
 var NodeStack:TNodeStack;
     Node,ChildNode:TpvScene3D.TGroup.TNode;
@@ -31011,8 +31519,7 @@ end;
 
 function TpvScene3D.TGroup.TInstance.GetBakedMeshFromSplittedNodeList(const aNodes:TpvScene3D.TGroup.TNodes;
                                                                       const aRelative:boolean=false;
-                                                                      const aMaterialAlphaModes:TpvScene3D.TMaterial.TAlphaModes=[TpvScene3D.TMaterial.TAlphaMode.Opaque,TpvScene3D.TMaterial.TAlphaMode.Blend,TpvScene3D.TMaterial.TAlphaMode.Mask];
-                                                                      const aNodeFilter:TOnNodeFilter=nil):TpvScene3D.TBakedMesh;
+                                                                      const aMaterialAlphaModes:TpvScene3D.TMaterial.TAlphaModes=[TpvScene3D.TMaterial.TAlphaMode.Opaque,TpvScene3D.TMaterial.TAlphaMode.Blend,TpvScene3D.TMaterial.TAlphaMode.Mask]):TpvScene3D.TBakedMesh;
 type TNodeStack=TpvDynamicStack<TpvScene3D.TGroup.TNode>;
 var NodeStack:TNodeStack;
     Node,ChildNode:TpvScene3D.TGroup.TNode;
@@ -31043,8 +31550,7 @@ end;
 function TpvScene3D.TGroup.TInstance.GetBakedMesh(const aRelative:boolean=false;
                                                   const aWithDynamicMeshs:boolean=false;
                                                   const aRootNodeIndex:TpvSizeInt=-1;
-                                                  const aMaterialAlphaModes:TpvScene3D.TMaterial.TAlphaModes=[TpvScene3D.TMaterial.TAlphaMode.Opaque,TpvScene3D.TMaterial.TAlphaMode.Blend,TpvScene3D.TMaterial.TAlphaMode.Mask];
-                                                  const aNodeFilter:TOnNodeFilter=nil):TpvScene3D.TBakedMesh;
+                                                  const aMaterialAlphaModes:TpvScene3D.TMaterial.TAlphaModes=[TpvScene3D.TMaterial.TAlphaMode.Opaque,TpvScene3D.TMaterial.TAlphaMode.Blend,TpvScene3D.TMaterial.TAlphaMode.Mask]):TpvScene3D.TBakedMesh;
 type TNodeStack=TpvDynamicStack<TpvSizeInt>;
 var Index,NodeIndex:TpvSizeInt;
     NodeStack:TNodeStack;
@@ -31091,8 +31597,7 @@ begin
            (GroupNode.fWeights.Count=0) and
            ((GroupInstanceNode.fCountOverwrites=0) or
             ((GroupInstanceNode.fCountOverwrites=1) and
-             ((GroupInstanceNode.fOverwrites[0].Flags=[TpvScene3D.TGroup.TInstance.TNode.TNodeOverwriteFlag.Defaults]))))))) and
-         ((not assigned(aNodeFilter)) or aNodeFilter(-1,nil,TpvScene3DRendererRenderPass.None,fGroup,self,GroupNode,GroupInstanceNode)) then begin
+             ((GroupInstanceNode.fOverwrites[0].Flags=[TpvScene3D.TGroup.TInstance.TNode.TNodeOverwriteFlag.Defaults]))))))) then begin
      GetBakedMeshProcessMorphSkinNode(result,
                                       GroupNode,
                                       GroupInstanceNode,
@@ -31211,8 +31716,12 @@ begin
 end;
 
 procedure TpvScene3D.TGroup.TInstance.SetDirty;
+var Index:TpvSizeInt;
 begin
  fDirtyCounter:=fGroup.fSceneInstance.fCountInFlightFrames+1;
+ for Index:=0 to fSceneInstance.fCountInFlightFrames-1 do begin
+  fActiveRenderPassesGenerations[Index]:=High(TPasMPUInt64);
+ end;
  fLastUpdateInFlightFrameIndex:=-1;
 end;
 
@@ -31514,62 +32023,15 @@ procedure TpvScene3D.TGroup.TInstance.PreparePerInFlightFrameRenderInstances(con
                                                                              const aViewBaseIndex:TpvSizeInt;
                                                                              const aCountViews:TpvSizeInt;
                                                                              const aFrustums:TpvFrustumDynamicArray;
-                                                                             out aFirstInstance:TpvSizeInt;
                                                                              out aInstancesCount:TpvSizeInt);
-var PerInFlightFrameRenderInstanceIndex,InstancesCount:TpvSizeInt;
-    GlobalVulkanDrawInfoDynamicArray:PGlobalVulkanDrawInfoDynamicArray;
-    GlobalRenderInstanceCullDataDynamicArray:PGlobalRenderInstanceCullDataDynamicArray;
-    GlobalRenderInstanceCullData:PCullData;
-    CurrentDrawInfo:PGPUDrawInfo;
-    PerInFlightFrameRenderInstanceDynamicArray:TpvScene3D.TGroup.TInstance.PPerInFlightFrameRenderInstanceDynamicArray;
-    PerInFlightFrameRenderInstance:TpvScene3D.TGroup.TInstance.PPerInFlightFrameRenderInstance;
-    GlobalVulkanInstanceCount:PPasMPUInt32;
+var PerInFlightFrameRenderInstanceDynamicArray:TpvScene3D.TGroup.TInstance.PPerInFlightFrameRenderInstanceDynamicArray;
 begin
-
  if fUseRenderInstances then begin
-
-  GlobalVulkanDrawInfoDynamicArray:=@fSceneInstance.fGlobalVulkanDrawInfoDynamicArrays[aInFlightFrameIndex];
-
-  GlobalRenderInstanceCullDataDynamicArray:=@fSceneInstance.fGlobalRenderInstanceCullDataDynamicArrays[aInFlightFrameIndex];
-
-  GlobalVulkanInstanceCount:=@fSceneInstance.fGlobalVulkanInstanceCounts[aInFlightFrameIndex];
-
-  aFirstInstance:=GlobalVulkanInstanceCount^;
-
-  InstancesCount:=0;
-
   PerInFlightFrameRenderInstanceDynamicArray:=@fPerInFlightFrameRenderInstances[aInFlightFrameIndex];
-
-  for PerInFlightFrameRenderInstanceIndex:=0 to PerInFlightFrameRenderInstanceDynamicArray^.Count-1 do begin
-
-   PerInFlightFrameRenderInstance:=@PerInFlightFrameRenderInstanceDynamicArray.Items[PerInFlightFrameRenderInstanceIndex];
-
-   // GPU-driven: no CPU PVS/Frustum culling, all active render instances go to GPU
-   begin
-    // DrawInfo entry for this instanced render instance (BDA pointers filled later per frame)
-    FillChar(GlobalVulkanDrawInfoDynamicArray^.AddNew^,SizeOf(TGPUDrawInfo),#0);
-    CurrentDrawInfo:=@GlobalVulkanDrawInfoDynamicArray^.ItemArray[GlobalVulkanDrawInfoDynamicArray^.Count-1];
-    CurrentDrawInfo^.ModelMatrix:=Matrix4x4ToGPUDrawInfoMatrix(PerInFlightFrameRenderInstance^.ModelMatrix);
-    CurrentDrawInfo^.PreviousModelMatrix:=Matrix4x4ToGPUDrawInfoMatrix(PerInFlightFrameRenderInstance^.PreviousModelMatrix);
-    CurrentDrawInfo^.InstanceDataIndex:=PerInFlightFrameRenderInstance^.InstanceDataIndex;
-    GlobalRenderInstanceCullData:=Pointer(GlobalRenderInstanceCullDataDynamicArray^.AddNew);
-    GlobalRenderInstanceCullData^.RenderInstance:=PerInFlightFrameRenderInstance.RenderInstance;
-    inc(InstancesCount);
-   end;
-
-  end;
-
-  inc(GlobalVulkanInstanceCount^,InstancesCount);
-
-  aInstancesCount:=InstancesCount;
-
+  aInstancesCount:=PerInFlightFrameRenderInstanceDynamicArray^.Count;
  end else begin
-
-  aFirstInstance:=0;
   aInstancesCount:=1;
-
  end;
-
 end;
 
 procedure TpvScene3D.TGroup.TInstance.Prepare(const aInFlightFrameIndex:TpvSizeInt;
@@ -31582,9 +32044,8 @@ procedure TpvScene3D.TGroup.TInstance.Prepare(const aInFlightFrameIndex:TpvSizeI
                                               const aFrustumCullMask:TpvUInt32;
                                               const aShadowPass:Boolean);
 var SkipListItemIndex,SkipListItemCount,DrawChoreographyBatchItemIndex,
-    DrawChoreographyBatchItemElementIndex,FirstInstance,InstancesCount:TpvSizeInt;
+    DrawChoreographyBatchItemElementIndex,InstancesCount:TpvSizeInt;
     RendererInstanceID:TpvUInt32;
-    GroupOnNodeFilter,GlobalOnNodeFilter:TpvScene3D.TGroup.TInstance.TOnNodeFilter;
     Scene:TpvScene3D.TGroup.TScene;
     Node:TpvScene3D.TGroup.TNode;
     InstanceNode:TpvScene3D.TGroup.TInstance.TNode;
@@ -31597,13 +32058,9 @@ var SkipListItemIndex,SkipListItemCount,DrawChoreographyBatchItemIndex,
     MaterialLODLevel:TpvInt32;
 begin
 
- FirstInstance:=0;
  InstancesCount:=0;
 
  if fActives[aInFlightFrameIndex] then begin
-
-  GroupOnNodeFilter:=fGroup.fOnNodeFilter;
-  GlobalOnNodeFilter:=fGroup.fSceneInstance.fOnNodeFilter;
 
   Scene:=fActiveScenes[aInFlightFrameIndex];
 
@@ -31626,10 +32083,7 @@ begin
 
     PotentiallyVisible:=InstanceNode.fInFlightFrameVisible[aInFlightFrameIndex];
 
-    if PotentiallyVisible and
-       (((not assigned(fOnNodeFilter)) or fOnNodeFilter(aInFlightFrameIndex,aRendererInstance,aRenderPass,Group,self,Node,InstanceNode)) and
-        ((not assigned(GroupOnNodeFilter)) or GroupOnNodeFilter(aInFlightFrameIndex,aRendererInstance,aRenderPass,Group,self,Node,InstanceNode)) and
-        ((not assigned(GlobalOnNodeFilter)) or GlobalOnNodeFilter(aInFlightFrameIndex,aRendererInstance,aRenderPass,Group,self,Node,InstanceNode))) then begin
+    if PotentiallyVisible then begin
 
      DrawChoreographyBatchItemIndices:=@Node.fDrawChoreographyBatchItemIndices;
      for DrawChoreographyBatchItemIndex:=0 to DrawChoreographyBatchItemIndices^.Count-1 do begin
@@ -31675,7 +32129,6 @@ begin
                                           aViewBaseIndex,
                                           aCountViews,
                                           aFrustums,
-                                          FirstInstance,
                                           InstancesCount);
 
   end;
@@ -31684,7 +32137,6 @@ begin
 
  RendererInstanceID:=TpvScene3DRendererInstance(aRendererInstance).ID;
 
- fVulkanPerInFlightFrameFirstInstances[aInFlightFrameIndex,RendererInstanceID,aRenderPass]:=FirstInstance;
  fVulkanPerInFlightFrameInstancesCounts[aInFlightFrameIndex,RendererInstanceID,aRenderPass]:=InstancesCount;
 
 end;
@@ -31906,6 +32358,8 @@ var Index,InFlightFrameIndex,Count:TpvSizeInt;
     UniversalFence:TpvVulkanFence;
     Stream:TStream;
     Memory:Pointer;
+    DrawInfoEntry:PGPUDrawInfo;
+    MatrixPairEntry:PGPUMatrixPair;
 begin
 
  inherited Create(aResourceManager,aParent,aMetaResource);
@@ -32143,25 +32597,44 @@ begin
 
  for Index:=0 to fCountInFlightFrames-1 do begin
 
-  fGlobalVulkanInstanceCounts[Index]:=1;
-
   fGlobalVulkanDrawInfoDynamicArrays[Index].Initialize;
   fGlobalVulkanDrawInfoDynamicArrays[Index].Resize(65536);
   fGlobalVulkanDrawInfoDynamicArrays[Index].Count:=0;
-  // Entry 0: default DrawInfo for non-instanced draws (BDA pointers filled per frame)
-  FillChar(fGlobalVulkanDrawInfoDynamicArrays[Index].AddNew^,SizeOf(TGPUDrawInfo),#0);
-  fGlobalVulkanDrawInfoDynamicArrays[Index].ItemArray[0].ModelMatrix:=Matrix4x4ToGPUDrawInfoMatrix(TpvMatrix4x4.Identity);
-  fGlobalVulkanDrawInfoDynamicArrays[Index].ItemArray[0].PreviousModelMatrix:=Matrix4x4ToGPUDrawInfoMatrix(TpvMatrix4x4.Identity);
+  // Entry 0: default DrawInfo for non-instanced draws (MatrixID=0 = Identity)
+  DrawInfoEntry:=fGlobalVulkanDrawInfoDynamicArrays[Index].AddNew;
+  FillChar(DrawInfoEntry^,SizeOf(TGPUDrawInfo),#0);
 
-  fGlobalRenderInstanceCullDataDynamicArrays[Index].Initialize;
-  fGlobalRenderInstanceCullDataDynamicArrays[Index].Resize(65536);
-  fGlobalRenderInstanceCullDataDynamicArrays[Index].Count:=0;
-  fGlobalRenderInstanceCullDataDynamicArrays[Index].AddNew;
+  fGlobalVulkanDrawInfoLocks[Index]:=TPasMPMultipleReaderSingleWriterLock.Create;
+
+  // MatrixPair buffer: Entry 0 = Identity sentinel
+  fGlobalMatrixPairDynamicArrays[Index].Initialize;
+  fGlobalMatrixPairDynamicArrays[Index].Resize(65536);
+  fGlobalMatrixPairDynamicArrays[Index].Count:=0;
+  MatrixPairEntry:=fGlobalMatrixPairDynamicArrays[Index].AddNew;
+  FillChar(MatrixPairEntry^,SizeOf(TGPUMatrixPair),#0);
+  MatrixPairEntry^.ModelMatrix:=TpvMatrix4x4.Identity;
+  MatrixPairEntry^.PreviousModelMatrix:=TpvMatrix4x4.Identity;
+
+  fGlobalMatrixPairLocks[Index]:=TPasMPMultipleReaderSingleWriterLock.Create;
+
+  fDrawInfoDirtyMin[Index]:=High(TpvSizeInt);
+  fDrawInfoDirtyMax[Index]:=-1;
+  fMatrixPairDirtyMin[Index]:=High(TpvSizeInt);
+  fMatrixPairDirtyMax[Index]:=-1;
+  fDrawInfoBufferResized[Index]:=false;
+  fMatrixPairBufferResized[Index]:=false;
+  fDrawInfoMappedBasePointers[Index]:=nil;
+  fMatrixPairMappedBasePointers[Index]:=nil;
+  fDrawInfoMappedBufferCounts[Index]:=0;
+  fMatrixPairMappedBufferCounts[Index]:=0;
 
   fGlobalBoundingSphereDynamicArrays[Index]:=nil;
   fGlobalBoundingSphereBuffers[Index]:=nil;
 
  end;
+
+ fDrawInfoMapping:=false;
+ fMatrixPairMapping:=false;
 
  FillChar(fGlobalBoundingSphereMaxCounts,SizeOf(fGlobalBoundingSphereMaxCounts),#0);
  fGlobalBoundingSphereIndexIDManager:=TpvIDManager.Create;
@@ -32255,11 +32728,31 @@ begin
 
  fTechniques:=TpvTechniques.Create;
 
- fCullObjectIDLock:=TPasMPSlimReaderWriterLock.Create;
+ fMeshObjectIDLock:=TPasMPSlimReaderWriterLock.Create;
 
- fCullObjectIDManager:=TpvScene3D.TIDManager.Create;
+ fMeshObjectIDManager:=TpvScene3D.TIDManager.Create;
 
- fMaxCullObjectID:=0;
+ fMaxMeshObjectID:=0;
+
+ fMatrixIDLock:=TPasMPSlimReaderWriterLock.Create;
+
+ fMatrixIDManager:=TpvScene3D.TIDManager.Create;
+
+ fMaxMatrixID:=0;
+
+ fLODInfoIDManager:=TpvScene3D.TIDManager.Create;
+ fLODInfoIDManagerLock:=TPasMPSlimReaderWriterLock.Create;
+ fGlobalLODInfoDynamicArray.Initialize;
+ fGlobalLODInfoBuffer:=nil;
+ fLODInfoGeneration:=0;
+ fLODInfoDataGeneration:=0;
+ for Index:=0 to MaxInFlightFrames-1 do begin
+  fGlobalLODNeededBuffers[Index]:=nil;
+ end;
+ fGlobalLODNeededBufferSize:=0;
+ fGPULODEnabled:=true;
+ fLODTransformAllLevels:=true;
+ fLODFrameCounter:=0;
 
  fImageListLock:=TPasMPCriticalSection.Create;
 
@@ -33004,8 +33497,6 @@ begin
  fDecalDebugFlags:=[];
  fDecalTimeSteps:=false;
 
- fOnNodeFilter:=nil;
-
  if assigned(fVulkanDevice) and fRaytracingActive then begin
 
   fVulkanFrameGraphStagingQueue:=fVulkanDevice.UniversalQueue;
@@ -33401,7 +33892,12 @@ begin
 
  for Index:=0 to fCountInFlightFrames-1 do begin
   FreeAndNil(fGlobalVulkanDrawInfoBuffers[Index]);
+  fDrawInfoMappedBasePointers[Index]:=nil;
+  fDrawInfoMappedBufferCounts[Index]:=0;
   FreeAndNil(fGlobalVulkanBDAPointersBuffers[Index]);
+  FreeAndNil(fGlobalVulkanMatrixPairBuffers[Index]);
+  fMatrixPairMappedBasePointers[Index]:=nil;
+  fMatrixPairMappedBufferCounts[Index]:=0;
  end;
 
 {for Index:=0 to fCountInFlightFrames-1 do begin
@@ -33591,9 +34087,21 @@ begin
 
  FreeAndNil(fProceduralTextureImageHookStringHashMap);
 
- FreeAndNil(fCullObjectIDManager);
+ FreeAndNil(fMeshObjectIDManager);
 
- FreeAndNil(fCullObjectIDLock);
+ FreeAndNil(fMeshObjectIDLock);
+
+ FreeAndNil(fMatrixIDManager);
+
+ FreeAndNil(fMatrixIDLock);
+
+ FreeAndNil(fGlobalLODInfoBuffer);
+ fGlobalLODInfoDynamicArray.Finalize;
+ FreeAndNil(fLODInfoIDManager);
+ FreeAndNil(fLODInfoIDManagerLock);
+ for Index:=0 to MaxInFlightFrames-1 do begin
+  FreeAndNil(fGlobalLODNeededBuffers[Index]);
+ end;
 
  FreeAndNil(fTechniques);
 
@@ -33639,8 +34147,10 @@ begin
  fVulkanJointBlockBufferData.Finalize;
 
  for Index:=0 to fCountInFlightFrames-1 do begin
+  FreeAndNil(fGlobalVulkanDrawInfoLocks[Index]);
   fGlobalVulkanDrawInfoDynamicArrays[Index].Finalize;
-  fGlobalRenderInstanceCullDataDynamicArrays[Index].Finalize;
+  FreeAndNil(fGlobalMatrixPairLocks[Index]);
+  fGlobalMatrixPairDynamicArrays[Index].Finalize;
   fGlobalBoundingSphereDynamicArrays[Index]:=nil;
   FreeAndNil(fGlobalBoundingSphereBuffers[Index]);
  end;
@@ -34730,7 +35240,7 @@ begin
                                                                             0,
                                                                             0,
                                                                             [TpvVulkanBufferFlag.PersistentMapped],
-{                                                                            TVkMemoryPropertyFlags(VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT),
+{                                                                           TVkMemoryPropertyFlags(VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT),
                                                                             0,
                                                                             0,
                                                                             TVkMemoryPropertyFlags(VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT),
@@ -34850,24 +35360,24 @@ begin
 
           for Index:=0 to fCountInFlightFrames-1 do begin
            fGlobalVulkanDrawInfoBuffers[Index]:=TpvVulkanBuffer.Create(fVulkanDevice,
-                                                                        Max(1,fGlobalVulkanDrawInfoDynamicArrays[Index].Count)*SizeOf(TGPUDrawInfo),
-                                                                        TVkBufferUsageFlags(VK_BUFFER_USAGE_TRANSFER_DST_BIT) or
-                                                                        TVkBufferUsageFlags(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT) or
-                                                                        TVkBufferUsageFlags(VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT_KHR),
-                                                                        TVkSharingMode(VK_SHARING_MODE_EXCLUSIVE),
-                                                                        [],
-                                                                        TVkMemoryPropertyFlags(VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT),
-                                                                        TVkMemoryPropertyFlags(VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) or TVkMemoryPropertyFlags(VK_MEMORY_PROPERTY_HOST_COHERENT_BIT),
-                                                                        0,
-                                                                        0,
-                                                                        0,
-                                                                        0,
-                                                                        0,
-                                                                        0,
-                                                                        [TpvVulkanBufferFlag.PersistentMapped],
-                                                                        0,
-                                                                        pvAllocationGroupIDScene3DDynamic,
-                                                                        'TpvScene3D.fGlobalVulkanDrawInfoBuffers['+IntToStr(Index)+']');
+                                                                       Max(1,fGlobalVulkanDrawInfoDynamicArrays[Index].Count)*SizeOf(TGPUDrawInfo),
+                                                                       TVkBufferUsageFlags(VK_BUFFER_USAGE_TRANSFER_DST_BIT) or
+                                                                       TVkBufferUsageFlags(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT) or
+                                                                       TVkBufferUsageFlags(VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT_KHR),
+                                                                       TVkSharingMode(VK_SHARING_MODE_EXCLUSIVE),
+                                                                       [],
+                                                                       TVkMemoryPropertyFlags(VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) or TVkMemoryPropertyFlags(VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT),
+                                                                       TVkMemoryPropertyFlags(VK_MEMORY_PROPERTY_HOST_COHERENT_BIT),
+                                                                       0,
+                                                                       0,
+                                                                       0,
+                                                                       0,
+                                                                       0,
+                                                                       0,
+                                                                       [TpvVulkanBufferFlag.PersistentMapped],
+                                                                       0,
+                                                                       pvAllocationGroupIDScene3DDynamic,
+                                                                       'TpvScene3D.fGlobalVulkanDrawInfoBuffers['+IntToStr(Index)+']');
            fVulkanDevice.DebugUtils.SetObjectName(fGlobalVulkanDrawInfoBuffers[Index].Handle,VK_OBJECT_TYPE_BUFFER,'TpvScene3D.fGlobalVulkanDrawInfoBuffers['+IntToStr(Index)+']');
           end;
 
@@ -34879,8 +35389,8 @@ begin
                                                                           TVkBufferUsageFlags(VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT_KHR),
                                                                           TVkSharingMode(VK_SHARING_MODE_EXCLUSIVE),
                                                                           [],
-                                                                          TVkMemoryPropertyFlags(VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT),
-                                                                          TVkMemoryPropertyFlags(VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) or TVkMemoryPropertyFlags(VK_MEMORY_PROPERTY_HOST_COHERENT_BIT),
+                                                                          TVkMemoryPropertyFlags(VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) or TVkMemoryPropertyFlags(VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT),
+                                                                          TVkMemoryPropertyFlags(VK_MEMORY_PROPERTY_HOST_COHERENT_BIT),
                                                                           0,
                                                                           0,
                                                                           0,
@@ -35785,36 +36295,138 @@ end;
 
 function TpvScene3D.GetDecalUserDataIndex(const aUserData:TpvPtrInt):TpvUInt32;
 begin
- // TODO: Implement decal system - for now return 0
- result:=0;
+ result:=TpvScene3D.TDecal(Pointer(aUserData)).fDecalItemIndex;
 end;
 
 procedure TpvScene3D.ResetFrame(const aInFlightFrameIndex:TpvSizeInt);
-var GlobalVulkanDrawInfoDynamicArray:PGlobalVulkanDrawInfoDynamicArray;
-    GlobalRenderInstanceCullDataDynamicArray:PGlobalRenderInstanceCullDataDynamicArray;
 begin
+end;
 
- fGlobalVulkanInstanceCounts[aInFlightFrameIndex]:=1;
+procedure TpvScene3D.FillDrawInfos(const aInFlightFrameIndex:TpvSizeInt);
+begin
+ // Legacy stub — DrawInfos are now written lazily in UpdateRenderInstances (RI path)
+ // and in TGroup.TInstance.Create (Non-RI path).
+end;
 
- GlobalVulkanDrawInfoDynamicArray:=@fGlobalVulkanDrawInfoDynamicArrays[aInFlightFrameIndex];
- if GlobalVulkanDrawInfoDynamicArray^.Count<1 then begin
-  GlobalVulkanDrawInfoDynamicArray^.Count:=0;
-  FillChar(GlobalVulkanDrawInfoDynamicArray^.AddNew^,SizeOf(TGPUDrawInfo),#0);
-  GlobalVulkanDrawInfoDynamicArray^.ItemArray[0].ModelMatrix:=Matrix4x4ToGPUDrawInfoMatrix(TpvMatrix4x4.Identity);
-  GlobalVulkanDrawInfoDynamicArray^.ItemArray[0].PreviousModelMatrix:=Matrix4x4ToGPUDrawInfoMatrix(TpvMatrix4x4.Identity);
+procedure TpvScene3D.EnsureDrawInfoCapacity(const aInFlightFrameIndex:TpvSizeInt;const aMinCount:TpvSizeInt;const aAlreadyReadLocked:Boolean=false);
+var OldCount,NewCount:TpvSizeInt;
+    HeldReadLock:Boolean;
+begin
+ // Pre-check before lock
+ if fGlobalVulkanDrawInfoDynamicArrays[aInFlightFrameIndex].Count<aMinCount then begin
+  if aAlreadyReadLocked then begin
+   fGlobalVulkanDrawInfoLocks[aInFlightFrameIndex].ReadToWrite;
+  end else begin
+   fGlobalVulkanDrawInfoLocks[aInFlightFrameIndex].AcquireWrite;
+  end;
+  try
+   // Re-check after lock
+   if fGlobalVulkanDrawInfoDynamicArrays[aInFlightFrameIndex].Count<aMinCount then begin
+    OldCount:=fGlobalVulkanDrawInfoDynamicArrays[aInFlightFrameIndex].Count;
+    if OldCount<aMinCount then begin
+     NewCount:=aMinCount+((aMinCount+3) shr 2);
+     fGlobalVulkanDrawInfoDynamicArrays[aInFlightFrameIndex].Resize(NewCount);
+     FillChar(fGlobalVulkanDrawInfoDynamicArrays[aInFlightFrameIndex].ItemArray[OldCount],(NewCount-OldCount)*SizeOf(TGPUDrawInfo),#0);
+     fGlobalVulkanDrawInfoDynamicArrays[aInFlightFrameIndex].Count:=NewCount;
+    end;
+   end;
+  finally
+   if aAlreadyReadLocked then begin
+    fGlobalVulkanDrawInfoLocks[aInFlightFrameIndex].WriteToRead;
+   end else begin
+    fGlobalVulkanDrawInfoLocks[aInFlightFrameIndex].ReleaseWrite;
+   end;
+  end;
  end;
- GlobalVulkanDrawInfoDynamicArray^.Count:=1;
+end;
 
- GlobalRenderInstanceCullDataDynamicArray:=@fGlobalRenderInstanceCullDataDynamicArrays[aInFlightFrameIndex];
- if GlobalRenderInstanceCullDataDynamicArray^.Count<1 then begin
-  GlobalRenderInstanceCullDataDynamicArray^.Count:=0;
-  GlobalRenderInstanceCullDataDynamicArray^.AddNew;
+procedure TpvScene3D.EnsureMatrixPairCapacity(const aInFlightFrameIndex:TpvSizeInt;const aMinCount:TpvSizeInt;const aAlreadyReadLocked:Boolean=false);
+var OldCount,NewCount:TpvSizeInt;
+begin
+ if fGlobalMatrixPairDynamicArrays[aInFlightFrameIndex].Count<aMinCount then begin
+  if aAlreadyReadLocked then begin
+   fGlobalMatrixPairLocks[aInFlightFrameIndex].ReadToWrite;
+  end else begin
+   fGlobalMatrixPairLocks[aInFlightFrameIndex].AcquireWrite;
+  end;
+  try
+   if fGlobalMatrixPairDynamicArrays[aInFlightFrameIndex].Count<aMinCount then begin
+    OldCount:=fGlobalMatrixPairDynamicArrays[aInFlightFrameIndex].Count;
+    if OldCount<aMinCount then begin
+     NewCount:=aMinCount+((aMinCount+3) shr 2);
+     fGlobalMatrixPairDynamicArrays[aInFlightFrameIndex].Resize(NewCount);
+     FillChar(fGlobalMatrixPairDynamicArrays[aInFlightFrameIndex].ItemArray[OldCount],(NewCount-OldCount)*SizeOf(TGPUMatrixPair),#0);
+     fGlobalMatrixPairDynamicArrays[aInFlightFrameIndex].Count:=NewCount;
+    end;
+   end;
+  finally
+   if aAlreadyReadLocked then begin
+    fGlobalMatrixPairLocks[aInFlightFrameIndex].WriteToRead;
+   end else begin
+    fGlobalMatrixPairLocks[aInFlightFrameIndex].ReleaseWrite;
+   end;
+  end;
  end;
- GlobalRenderInstanceCullDataDynamicArray^.Count:=1;
- if length(GlobalRenderInstanceCullDataDynamicArray^.Items)>0 then begin
-  FillChar(GlobalRenderInstanceCullDataDynamicArray^.Items[0],SizeOf(TCullData)*Length(GlobalRenderInstanceCullDataDynamicArray^.Items),#0);
- end;
+end;
 
+procedure TpvScene3D.MarkDrawInfoDirty(const aInFlightFrameIndex:TpvSizeInt;const aIndex:TpvSizeInt);
+begin
+ if aIndex<fDrawInfoDirtyMin[aInFlightFrameIndex] then begin
+  fDrawInfoDirtyMin[aInFlightFrameIndex]:=aIndex;
+ end;
+ if aIndex>fDrawInfoDirtyMax[aInFlightFrameIndex] then begin
+  fDrawInfoDirtyMax[aInFlightFrameIndex]:=aIndex;
+ end;
+ if assigned(fDrawInfoMappedBasePointers[aInFlightFrameIndex]) and (aIndex>=0) and (aIndex<fDrawInfoMappedBufferCounts[aInFlightFrameIndex]) then begin
+  PGPUDrawInfo(Pointer(TpvPtrUInt(fDrawInfoMappedBasePointers[aInFlightFrameIndex])+TpvPtrUInt(TpvSizeUInt(aIndex)*SizeOf(TGPUDrawInfo))))^:=fGlobalVulkanDrawInfoDynamicArrays[aInFlightFrameIndex].ItemArray[aIndex];
+ end;
+end;
+
+procedure TpvScene3D.MarkDrawInfoDirtyRange(const aInFlightFrameIndex:TpvSizeInt;const aMinIndex,aMaxIndex:TpvSizeInt);
+var RangeIndex:TpvSizeInt;
+    MappedBase:Pointer;
+    MappedCount:TpvSizeInt;
+begin
+ if aMinIndex<fDrawInfoDirtyMin[aInFlightFrameIndex] then begin
+  fDrawInfoDirtyMin[aInFlightFrameIndex]:=aMinIndex;
+ end;
+ if aMaxIndex>fDrawInfoDirtyMax[aInFlightFrameIndex] then begin
+  fDrawInfoDirtyMax[aInFlightFrameIndex]:=aMaxIndex;
+ end;
+ MappedBase:=fDrawInfoMappedBasePointers[aInFlightFrameIndex];
+ if assigned(MappedBase) then begin
+  MappedCount:=fDrawInfoMappedBufferCounts[aInFlightFrameIndex];
+  for RangeIndex:=aMinIndex to aMaxIndex do begin
+   if (RangeIndex>=0) and (RangeIndex<MappedCount) then begin
+    PGPUDrawInfo(Pointer(TpvPtrUInt(MappedBase)+TpvPtrUInt(TpvSizeUInt(RangeIndex)*SizeOf(TGPUDrawInfo))))^:=fGlobalVulkanDrawInfoDynamicArrays[aInFlightFrameIndex].ItemArray[RangeIndex];
+   end;
+  end;
+ end;
+end;
+
+procedure TpvScene3D.MarkMatrixPairDirty(const aInFlightFrameIndex:TpvSizeInt;const aIndex:TpvSizeInt);
+begin
+ if aIndex<fMatrixPairDirtyMin[aInFlightFrameIndex] then begin
+  fMatrixPairDirtyMin[aInFlightFrameIndex]:=aIndex;
+ end;
+ if aIndex>fMatrixPairDirtyMax[aInFlightFrameIndex] then begin
+  fMatrixPairDirtyMax[aInFlightFrameIndex]:=aIndex;
+ end;
+ if assigned(fMatrixPairMappedBasePointers[aInFlightFrameIndex]) and (aIndex>=0) and (aIndex<fMatrixPairMappedBufferCounts[aInFlightFrameIndex]) then begin
+  PGPUMatrixPair(Pointer(TpvPtrUInt(fMatrixPairMappedBasePointers[aInFlightFrameIndex])+TpvPtrUInt(TpvSizeUInt(aIndex)*SizeOf(TGPUMatrixPair))))^:=fGlobalMatrixPairDynamicArrays[aInFlightFrameIndex].ItemArray[aIndex];
+ end;
+end;
+
+procedure TpvScene3D.MarkAllDrawInfoDirty(const aInFlightFrameIndex:TpvSizeInt);
+begin
+ fDrawInfoDirtyMin[aInFlightFrameIndex]:=0;
+ fDrawInfoDirtyMax[aInFlightFrameIndex]:=fGlobalVulkanDrawInfoDynamicArrays[aInFlightFrameIndex].Count-1;
+end;
+
+procedure TpvScene3D.MarkAllMatrixPairDirty(const aInFlightFrameIndex:TpvSizeInt);
+begin
+ fMatrixPairDirtyMin[aInFlightFrameIndex]:=0;
+ fMatrixPairDirtyMax[aInFlightFrameIndex]:=fGlobalMatrixPairDynamicArrays[aInFlightFrameIndex].Count-1;
 end;
 
 procedure TpvScene3D.Check(const aInFlightFrameIndex:TpvSizeInt);
@@ -36448,16 +37060,23 @@ begin
    PartCPUTime:=PartEndCPUTime-PartStartCPUTime;
    fTimeRebuildDirectedAcyclicGraph:=pvApplication.HighResolutionTimer.ToFloatSeconds(PartCPUTime)*1000.0; // in ms
 
-   PartStartCPUTime:=pvApplication.HighResolutionTimer.GetTime;
-   ProcessDirectedAcyclicGraph(aInFlightFrameIndex);
-   PartEndCPUTime:=pvApplication.HighResolutionTimer.GetTime;
-   PartCPUTime:=PartEndCPUTime-PartStartCPUTime;
-   fTimeProcessDirectedAcyclicGraph:=pvApplication.HighResolutionTimer.ToFloatSeconds(PartCPUTime)*1000.0; // in ms
+   fGlobalVulkanDrawInfoLocks[aInFlightFrameIndex].AcquireRead;
+   try
+
+    PartStartCPUTime:=pvApplication.HighResolutionTimer.GetTime;
+    ProcessDirectedAcyclicGraph(aInFlightFrameIndex);
+    PartEndCPUTime:=pvApplication.HighResolutionTimer.GetTime;
+    PartCPUTime:=PartEndCPUTime-PartStartCPUTime;
+    fTimeProcessDirectedAcyclicGraph:=pvApplication.HighResolutionTimer.ToFloatSeconds(PartCPUTime)*1000.0; // in ms
 
 
 {$ifdef DeferredLightAABBTreeUpdates}
-   ProcessDeferredLightOperations;
+    ProcessDeferredLightOperations;
 {$endif}
+
+   finally
+    fGlobalVulkanDrawInfoLocks[aInFlightFrameIndex].ReleaseRead;
+   end;
 
   finally
    fGroupInstanceListLock.Release;
@@ -37005,6 +37624,10 @@ var PlanetIndex,PassIndex,CountPlanetAtmospherePrecipitationSimulationToSignalSe
     BeginTime:TpvHighResolutionTime;
     VulkanShortTermDynamicBufferData:TVulkanShortTermDynamicBufferData;
     VulkanLongTermStaticBufferData:TVulkanLongTermStaticBufferData;
+    BufferMemoryBarrier:TVkBufferMemoryBarrier;
+    MemoryBarrier:TVkMemoryBarrier;
+    RendererInstanceIndex:TpvSizeInt;
+    RendererInstance:TpvScene3DRendererInstance;
 begin
 
  //exit;
@@ -37223,6 +37846,39 @@ begin
 
    end;
 
+   // Clear lodNeeded + LODLevel buffers for current IFF before mesh_cull.comp writes to them
+   if fGPULODEnabled then begin
+    fVulkanDevice.DebugUtils.CmdBufLabelBegin(CommandBuffer,'LOD Buffer Clear',[0.5,0.75,1.0,1.0]);
+    // Clear lodNeeded buffer (global)
+    if assigned(fGlobalLODNeededBuffers[aInFlightFrameIndex]) then begin
+     CommandBuffer.CmdFillBuffer(fGlobalLODNeededBuffers[aInFlightFrameIndex].Handle,0,VK_WHOLE_SIZE,0);
+    end;
+    // Clear LODLevel buffers (per RendererInstance)
+    fRendererInstanceLock.Acquire;
+    try
+     for RendererInstanceIndex:=0 to fRendererInstanceList.Count-1 do begin
+      RendererInstance:=TpvScene3DRendererInstance(fRendererInstanceList.Items[RendererInstanceIndex]);
+      if assigned(RendererInstance.fLODLevelBuffers[aInFlightFrameIndex]) then begin
+       CommandBuffer.CmdFillBuffer(RendererInstance.fLODLevelBuffers[aInFlightFrameIndex].Handle,0,VK_WHOLE_SIZE,0);
+      end;
+     end;
+    finally
+     fRendererInstanceLock.Release;
+    end;
+    // Single global memory barrier for all FillBuffer operations (Transfer→Compute)
+    FillChar(MemoryBarrier,SizeOf(TVkMemoryBarrier),#0);
+    MemoryBarrier.sType:=VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+    MemoryBarrier.srcAccessMask:=TVkAccessFlags(VK_ACCESS_TRANSFER_WRITE_BIT);
+    MemoryBarrier.dstAccessMask:=TVkAccessFlags(VK_ACCESS_SHADER_READ_BIT) or TVkAccessFlags(VK_ACCESS_SHADER_WRITE_BIT);
+    CommandBuffer.CmdPipelineBarrier(TVkPipelineStageFlags(VK_PIPELINE_STAGE_TRANSFER_BIT),
+                                     TVkPipelineStageFlags(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT),
+                                     0,
+                                     1,@MemoryBarrier,
+                                     0,nil,
+                                     0,nil);
+    fVulkanDevice.DebugUtils.CmdBufLabelEnd(CommandBuffer);
+   end;
+
    fProcessFrameTimerQueryMeshComputeIndex:=fProcessFrameTimerQueries[aInFlightFrameIndex].Start(fVulkanProcessFrameQueue,CommandBuffer,'Mesh compute');
    BeginTime:=pvApplication.HighResolutionTimer.GetTime;
    TpvScene3DMeshCompute(fMeshCompute).Execute(CommandBuffer,aInFlightFrameIndex,true);
@@ -37312,6 +37968,10 @@ begin
     for PassIndex:=0 to (length(fLastProcessFrameCPUTimeValues)-2)-1 do begin
      fLastProcessFrameCPUTimeValues[length(fLastProcessFrameCPUTimeValues)-2]:=fLastProcessFrameCPUTimeValues[length(fLastProcessFrameCPUTimeValues)-2]+fLastProcessFrameCPUTimeValues[PassIndex];
     end;
+   end;
+
+   if fGPULODEnabled then begin
+    inc(fLODFrameCounter);
    end;
 
    CommandBuffer.EndRecording;
@@ -37435,6 +38095,10 @@ var Index,ItemID,PlanetIndex:TpvSizeInt;
     DrawInfoIndex,PreviousInFlightFrameIndex:TpvSizeInt;
     CurrentDrawInfo:PGPUDrawInfo;
     DrawInfoBDACachedVertices,DrawInfoBDAStaticVertices,DrawInfoBDAPreviousCachedVertices,DrawInfoBDAGeneration,DrawInfoBDAPreviousGeneration:TVkDeviceAddress;
+    DirtyUploadOffset,DirtyUploadSize:TVkDeviceSize;
+    DirtyMin,DirtyMax:TpvSizeInt;
+    RendererInstanceIndex:TpvSizeInt;
+    RendererInstance:TpvScene3DRendererInstance;
 begin
 
  if assigned(fVulkanDevice) then begin
@@ -37741,7 +38405,9 @@ begin
   end;
 
   // DrawInfo SSBO: per-frame buffer for BDA vertex pulling
-  if fGlobalVulkanDrawInfoDynamicArrays[aInFlightFrameIndex].Count>0 then begin
+  fGlobalVulkanDrawInfoLocks[aInFlightFrameIndex].AcquireRead;
+  try
+   if fGlobalVulkanDrawInfoDynamicArrays[aInFlightFrameIndex].Count>0 then begin
 
    Size:=Max(1,fGlobalVulkanDrawInfoDynamicArrays[aInFlightFrameIndex].Count)*SizeOf(TGPUDrawInfo);
 
@@ -37749,6 +38415,8 @@ begin
       (fGlobalVulkanDrawInfoBuffers[aInFlightFrameIndex].Size<Size) then begin
 
     FreeAndNil(fGlobalVulkanDrawInfoBuffers[aInFlightFrameIndex]);
+    fDrawInfoMappedBasePointers[aInFlightFrameIndex]:=nil;
+    fDrawInfoMappedBufferCounts[aInFlightFrameIndex]:=0;
 
     case fBufferStreamingMode of
 
@@ -37760,8 +38428,8 @@ begin
                                                                                  TVkBufferUsageFlags(VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT_KHR),
                                                                                  TVkSharingMode(VK_SHARING_MODE_EXCLUSIVE),
                                                                                  [],
-                                                                                 TVkMemoryPropertyFlags(VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT),
-                                                                                 TVkMemoryPropertyFlags(VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) or TVkMemoryPropertyFlags(VK_MEMORY_PROPERTY_HOST_COHERENT_BIT),
+                                                                                 TVkMemoryPropertyFlags(VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) or TVkMemoryPropertyFlags(VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT),
+                                                                                 TVkMemoryPropertyFlags(VK_MEMORY_PROPERTY_HOST_COHERENT_BIT),
                                                                                  0,
                                                                                  0,
                                                                                  0,
@@ -37812,6 +38480,16 @@ begin
                                                                           [fGlobalVulkanDrawInfoBuffers[aInFlightFrameIndex].DescriptorBufferInfo],
                                                                           [],
                                                                           true);
+     fDrawInfoBufferResized[aInFlightFrameIndex]:=true;
+
+     // Cache mapped pointer for direct-mapped writes
+     if fDrawInfoMapping and (fBufferStreamingMode=TBufferStreamingMode.Direct) then begin
+      fDrawInfoMappedBasePointers[aInFlightFrameIndex]:=fGlobalVulkanDrawInfoBuffers[aInFlightFrameIndex].Memory.MapMemory(0,TVkDeviceSize(VK_WHOLE_SIZE));
+      fDrawInfoMappedBufferCounts[aInFlightFrameIndex]:=Size div SizeOf(TGPUDrawInfo);
+     end else begin
+      fDrawInfoMappedBasePointers[aInFlightFrameIndex]:=nil;
+      fDrawInfoMappedBufferCounts[aInFlightFrameIndex]:=0;
+     end;
 
    end;
 
@@ -37851,47 +38529,380 @@ begin
     fGlobalVulkanBDAPointersData[aInFlightFrameIndex].PreviousCachedVerticesDeviceAddress:=DrawInfoBDAPreviousCachedVertices;
     fGlobalVulkanBDAPointersData[aInFlightFrameIndex].GenerationDeviceAddress:=DrawInfoBDAGeneration;
     fGlobalVulkanBDAPointersData[aInFlightFrameIndex].PreviousGenerationDeviceAddress:=DrawInfoBDAPreviousGeneration;
-    fGlobalVulkanBDAPointersData[aInFlightFrameIndex].Reserved:=0;
-    // Per-DrawInfo BDA fill loop commented out — for future per-group buffers, uncomment this
-    // and remove the global BDA pointers buffer approach
-    (*
-    for DrawInfoIndex:=0 to fGlobalVulkanDrawInfoDynamicArrays[aInFlightFrameIndex].Count-1 do begin
-     CurrentDrawInfo:=@fGlobalVulkanDrawInfoDynamicArrays[aInFlightFrameIndex].ItemArray[DrawInfoIndex];
-     CurrentDrawInfo^.CachedVerticesDeviceAddress:=DrawInfoBDACachedVertices;
-     CurrentDrawInfo^.StaticVerticesDeviceAddress:=DrawInfoBDAStaticVertices;
-     CurrentDrawInfo^.PreviousCachedVerticesDeviceAddress:=DrawInfoBDAPreviousCachedVertices;
-     CurrentDrawInfo^.GenerationDeviceAddress:=DrawInfoBDAGeneration;
-     CurrentDrawInfo^.PreviousGenerationDeviceAddress:=DrawInfoBDAPreviousGeneration;
-    end;
-    *)
+    // MatrixPairDeviceAddress will be filled after MatrixPair buffer upload below
+
    end;
 
-   case fBufferStreamingMode of
+   // Determine dirty range for DrawInfo upload
+   if fDrawInfoBufferResized[aInFlightFrameIndex] then begin
+    // Buffer was just created/resized — upload everything
+    DirtyMin:=0;
+    DirtyMax:=fGlobalVulkanDrawInfoDynamicArrays[aInFlightFrameIndex].Count-1;
+    fDrawInfoBufferResized[aInFlightFrameIndex]:=false;
+   end else begin
+    DirtyMin:=fDrawInfoDirtyMin[aInFlightFrameIndex];
+    DirtyMax:=fDrawInfoDirtyMax[aInFlightFrameIndex];
+   end;
 
-    TBufferStreamingMode.Direct:begin
-     fGlobalVulkanDrawInfoBuffers[aInFlightFrameIndex].UpdateData(fGlobalVulkanDrawInfoDynamicArrays[aInFlightFrameIndex].ItemArray[0],
-                                                                   0,
-                                                                   fGlobalVulkanDrawInfoDynamicArrays[aInFlightFrameIndex].Count*SizeOf(TGPUDrawInfo),
-                                                                   FlushUpdateData
-                                                                  );
+   // Clamp dirty range to actual array bounds
+   if DirtyMin<0 then begin
+    DirtyMin:=0;
+   end;
+   if DirtyMax>=fGlobalVulkanDrawInfoDynamicArrays[aInFlightFrameIndex].Count then begin
+    DirtyMax:=fGlobalVulkanDrawInfoDynamicArrays[aInFlightFrameIndex].Count-1;
+   end;
+
+   if DirtyMin<=DirtyMax then begin
+    DirtyUploadOffset:=DirtyMin*SizeOf(TGPUDrawInfo);
+    DirtyUploadSize:=(DirtyMax-DirtyMin+1)*SizeOf(TGPUDrawInfo);
+    case fBufferStreamingMode of
+
+     TBufferStreamingMode.Direct:begin
+      if assigned(fDrawInfoMappedBasePointers[aInFlightFrameIndex]) and (DirtyMax<fDrawInfoMappedBufferCounts[aInFlightFrameIndex]) then begin
+       // Direct-mapped: data already written to GPU buffer by MarkDrawInfoDirty
+      end else begin
+       fGlobalVulkanDrawInfoBuffers[aInFlightFrameIndex].UpdateData(fGlobalVulkanDrawInfoDynamicArrays[aInFlightFrameIndex].ItemArray[DirtyMin],
+                                                                     DirtyUploadOffset,
+                                                                     DirtyUploadSize,
+                                                                     FlushUpdateData
+                                                                    );
+      end;
+     end;
+
+     TBufferStreamingMode.Staging:begin
+      fVulkanDevice.MemoryStaging.Upload(fVulkanStagingQueue,
+                                         fVulkanStagingCommandBuffer,
+                                         fVulkanStagingFence,
+                                         fGlobalVulkanDrawInfoDynamicArrays[aInFlightFrameIndex].ItemArray[DirtyMin],
+                                         fGlobalVulkanDrawInfoBuffers[aInFlightFrameIndex],
+                                         DirtyUploadOffset,
+                                         DirtyUploadSize);
+     end;
+
+     else begin
+      Assert(false);
+     end;
+
+    end;
+   end;
+
+   // Reset DrawInfo dirty range
+   fDrawInfoDirtyMin[aInFlightFrameIndex]:=High(TpvSizeInt);
+   fDrawInfoDirtyMax[aInFlightFrameIndex]:=-1;
+
+  end;
+
+  finally
+   fGlobalVulkanDrawInfoLocks[aInFlightFrameIndex].ReleaseRead;
+  end;
+
+  // Upload MatrixPair buffer
+  fGlobalMatrixPairLocks[aInFlightFrameIndex].AcquireRead;
+  try
+   if fGlobalMatrixPairDynamicArrays[aInFlightFrameIndex].Count>0 then begin
+
+    Size:=Max(1,fGlobalMatrixPairDynamicArrays[aInFlightFrameIndex].Count)*SizeOf(TGPUMatrixPair);
+
+    if (not assigned(fGlobalVulkanMatrixPairBuffers[aInFlightFrameIndex])) or
+       (fGlobalVulkanMatrixPairBuffers[aInFlightFrameIndex].Size<Size) then begin
+
+     FreeAndNil(fGlobalVulkanMatrixPairBuffers[aInFlightFrameIndex]);
+     fMatrixPairMappedBasePointers[aInFlightFrameIndex]:=nil;
+     fMatrixPairMappedBufferCounts[aInFlightFrameIndex]:=0;
+
+     case fBufferStreamingMode of
+
+      TBufferStreamingMode.Direct:begin
+       fGlobalVulkanMatrixPairBuffers[aInFlightFrameIndex]:=TpvVulkanBuffer.Create(fVulkanDevice,
+                                                                                    Size,
+                                                                                    TVkBufferUsageFlags(VK_BUFFER_USAGE_TRANSFER_DST_BIT) or
+                                                                                    TVkBufferUsageFlags(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT) or
+                                                                                    TVkBufferUsageFlags(VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT_KHR),
+                                                                                    TVkSharingMode(VK_SHARING_MODE_EXCLUSIVE),
+                                                                                    [],
+                                                                                    TVkMemoryPropertyFlags(VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) or TVkMemoryPropertyFlags(VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT),
+                                                                                    TVkMemoryPropertyFlags(VK_MEMORY_PROPERTY_HOST_COHERENT_BIT),
+                                                                                    0,
+                                                                                    0,
+                                                                                    0,
+                                                                                    0,
+                                                                                    0,
+                                                                                    0,
+                                                                                    [TpvVulkanBufferFlag.PersistentMapped,TpvVulkanBufferFlag.OwnSingleMemoryChunk,TpvVulkanBufferFlag.DedicatedAllocation],
+                                                                                    0,
+                                                                                    pvAllocationGroupIDScene3DDynamic,
+                                                                                    'TpvScene3D.fGlobalVulkanMatrixPairBuffers['+IntToStr(aInFlightFrameIndex)+']');
+       fVulkanDevice.DebugUtils.SetObjectName(fGlobalVulkanMatrixPairBuffers[aInFlightFrameIndex].Handle,VK_OBJECT_TYPE_BUFFER,'TpvScene3D.fGlobalVulkanMatrixPairBuffers['+IntToStr(aInFlightFrameIndex)+']');
+      end;
+
+      TBufferStreamingMode.Staging:begin
+       fGlobalVulkanMatrixPairBuffers[aInFlightFrameIndex]:=TpvVulkanBuffer.Create(fVulkanDevice,
+                                                                                    Size,
+                                                                                    TVkBufferUsageFlags(VK_BUFFER_USAGE_TRANSFER_DST_BIT) or
+                                                                                    TVkBufferUsageFlags(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT) or
+                                                                                    TVkBufferUsageFlags(VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT_KHR),
+                                                                                    TVkSharingMode(VK_SHARING_MODE_EXCLUSIVE),
+                                                                                    [],
+                                                                                    0,
+                                                                                    TVkMemoryPropertyFlags(VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT),
+                                                                                    0,
+                                                                                    TVkMemoryPropertyFlags(VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT),
+                                                                                    0,
+                                                                                    0,
+                                                                                    0,
+                                                                                    0,
+                                                                                    [TpvVulkanBufferFlag.OwnSingleMemoryChunk,TpvVulkanBufferFlag.DedicatedAllocation],
+                                                                                    0,
+                                                                                    pvAllocationGroupIDScene3DDynamic,
+                                                                                    'TpvScene3D.fGlobalVulkanMatrixPairBuffers['+IntToStr(aInFlightFrameIndex)+']');
+       fVulkanDevice.DebugUtils.SetObjectName(fGlobalVulkanMatrixPairBuffers[aInFlightFrameIndex].Handle,VK_OBJECT_TYPE_BUFFER,'TpvScene3D.fGlobalVulkanMatrixPairBuffers['+IntToStr(aInFlightFrameIndex)+']');
+      end;
+
+      else begin
+       Assert(false);
+      end;
+
+     end;
+
+     fMatrixPairBufferResized[aInFlightFrameIndex]:=true;
+     // Cache mapped pointer for direct-mapped writes
+     if fMatrixPairMapping and (fBufferStreamingMode=TBufferStreamingMode.Direct) then begin
+      fMatrixPairMappedBasePointers[aInFlightFrameIndex]:=fGlobalVulkanMatrixPairBuffers[aInFlightFrameIndex].Memory.MapMemory(0,TVkDeviceSize(VK_WHOLE_SIZE));
+      fMatrixPairMappedBufferCounts[aInFlightFrameIndex]:=Size div SizeOf(TGPUMatrixPair);
+     end else begin
+      fMatrixPairMappedBasePointers[aInFlightFrameIndex]:=nil;
+      fMatrixPairMappedBufferCounts[aInFlightFrameIndex]:=0; 
+     end;
+
     end;
 
+    // Determine dirty range for MatrixPair upload
+    if fMatrixPairBufferResized[aInFlightFrameIndex] then begin
+     // Buffer was just created/resized — upload everything
+     DirtyMin:=0;
+     DirtyMax:=fGlobalMatrixPairDynamicArrays[aInFlightFrameIndex].Count-1;
+     fMatrixPairBufferResized[aInFlightFrameIndex]:=false;
+    end else begin
+     DirtyMin:=fMatrixPairDirtyMin[aInFlightFrameIndex];
+     DirtyMax:=fMatrixPairDirtyMax[aInFlightFrameIndex];
+    end;
+
+    // Clamp dirty range to actual array bounds
+    if DirtyMin<0 then begin
+     DirtyMin:=0;
+    end;
+    if DirtyMax>=fGlobalMatrixPairDynamicArrays[aInFlightFrameIndex].Count then begin
+     DirtyMax:=fGlobalMatrixPairDynamicArrays[aInFlightFrameIndex].Count-1;
+    end;
+
+    if DirtyMin<=DirtyMax then begin
+     DirtyUploadOffset:=DirtyMin*SizeOf(TGPUMatrixPair);
+     DirtyUploadSize:=(DirtyMax-DirtyMin+1)*SizeOf(TGPUMatrixPair);
+     case fBufferStreamingMode of
+
+      TBufferStreamingMode.Direct:begin
+       if assigned(fMatrixPairMappedBasePointers[aInFlightFrameIndex]) and (DirtyMax<fMatrixPairMappedBufferCounts[aInFlightFrameIndex]) then begin
+        // Direct-mapped: data already written to GPU buffer by MarkMatrixPairDirty
+       end else begin
+        fGlobalVulkanMatrixPairBuffers[aInFlightFrameIndex].UpdateData(fGlobalMatrixPairDynamicArrays[aInFlightFrameIndex].ItemArray[DirtyMin],
+                                                                        DirtyUploadOffset,
+                                                                        DirtyUploadSize,
+                                                                        FlushUpdateData
+                                                                       );
+       end;
+      end;
+
+      TBufferStreamingMode.Staging:begin
+       fVulkanDevice.MemoryStaging.Upload(fVulkanStagingQueue,
+                                          fVulkanStagingCommandBuffer,
+                                          fVulkanStagingFence,
+                                          fGlobalMatrixPairDynamicArrays[aInFlightFrameIndex].ItemArray[DirtyMin],
+                                          fGlobalVulkanMatrixPairBuffers[aInFlightFrameIndex],
+                                          DirtyUploadOffset,
+                                          DirtyUploadSize);
+      end;
+
+      else begin
+       Assert(false);
+      end;
+
+     end;
+    end;
+
+    // Reset MatrixPair dirty range
+    fMatrixPairDirtyMin[aInFlightFrameIndex]:=High(TpvSizeInt);
+    fMatrixPairDirtyMax[aInFlightFrameIndex]:=-1;
+
+
+   end;
+
+  finally
+   fGlobalMatrixPairLocks[aInFlightFrameIndex].ReleaseRead;
+  end;
+
+  // Fill MatrixPairDeviceAddress after buffer is created/uploaded
+  fGlobalVulkanBDAPointersData[aInFlightFrameIndex].MatrixPairDeviceAddress:=0;
+  if assigned(fGlobalVulkanMatrixPairBuffers[aInFlightFrameIndex]) then begin
+   fGlobalVulkanBDAPointersData[aInFlightFrameIndex].MatrixPairDeviceAddress:=fGlobalVulkanMatrixPairBuffers[aInFlightFrameIndex].DeviceAddress;
+  end;
+
+  // LODInfo buffer creation + upload (static, not per-IFF)
+  fGlobalVulkanBDAPointersData[aInFlightFrameIndex].LODInfoDeviceAddress:=0;
+  if fGPULODEnabled and (fLODInfoGeneration<>fLODInfoDataGeneration) and (fGlobalLODInfoDynamicArray.Count>0) then begin
+   Size:=Max(1,fGlobalLODInfoDynamicArray.Count)*TpvInt64(SizeOf(TGPULODInfo));
+   if (not assigned(fGlobalLODInfoBuffer)) or (fGlobalLODInfoBuffer.Size<Size) then begin
+    FreeAndNil(fGlobalLODInfoBuffer);
+    Size:=Max(1,fGlobalLODInfoDynamicArray.Count+((fGlobalLODInfoDynamicArray.Count+1) shr 1))*TpvInt64(SizeOf(TGPULODInfo));
+    case fBufferStreamingMode of
+     TBufferStreamingMode.Direct:begin
+      fGlobalLODInfoBuffer:=TpvVulkanBuffer.Create(fVulkanDevice,
+                                                    Size,
+                                                    TVkBufferUsageFlags(VK_BUFFER_USAGE_TRANSFER_DST_BIT) or
+                                                    TVkBufferUsageFlags(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT) or
+                                                    TVkBufferUsageFlags(VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT_KHR),
+                                                    TVkSharingMode(VK_SHARING_MODE_EXCLUSIVE),
+                                                    [],
+                                                    TVkMemoryPropertyFlags(VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) or TVkMemoryPropertyFlags(VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT),
+                                                    TVkMemoryPropertyFlags(VK_MEMORY_PROPERTY_HOST_COHERENT_BIT),
+                                                    0,
+                                                    0,
+                                                    0,
+                                                    0,
+                                                    0,
+                                                    0,
+                                                    [TpvVulkanBufferFlag.PersistentMapped,TpvVulkanBufferFlag.OwnSingleMemoryChunk,TpvVulkanBufferFlag.DedicatedAllocation],
+                                                    0,
+                                                    pvAllocationGroupIDScene3DStatic,
+                                                    'TpvScene3D.fGlobalLODInfoBuffer');
+      fVulkanDevice.DebugUtils.SetObjectName(fGlobalLODInfoBuffer.Handle,VK_OBJECT_TYPE_BUFFER,'TpvScene3D.fGlobalLODInfoBuffer');
+     end;
+     TBufferStreamingMode.Staging:begin
+      fGlobalLODInfoBuffer:=TpvVulkanBuffer.Create(fVulkanDevice,
+                                                    Size,
+                                                    TVkBufferUsageFlags(VK_BUFFER_USAGE_TRANSFER_DST_BIT) or
+                                                    TVkBufferUsageFlags(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT) or
+                                                    TVkBufferUsageFlags(VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT_KHR),
+                                                    TVkSharingMode(VK_SHARING_MODE_EXCLUSIVE),
+                                                    [],
+                                                    0,
+                                                    TVkMemoryPropertyFlags(VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT),
+                                                    0,
+                                                    TVkMemoryPropertyFlags(VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT),
+                                                    0,
+                                                    0,
+                                                    0,
+                                                    0,
+                                                    [TpvVulkanBufferFlag.OwnSingleMemoryChunk,TpvVulkanBufferFlag.DedicatedAllocation],
+                                                    0,
+                                                    pvAllocationGroupIDScene3DStatic,
+                                                    'TpvScene3D.fGlobalLODInfoBuffer');
+      fVulkanDevice.DebugUtils.SetObjectName(fGlobalLODInfoBuffer.Handle,VK_OBJECT_TYPE_BUFFER,'TpvScene3D.fGlobalLODInfoBuffer');
+     end;
+     else begin
+      Assert(false);
+     end;
+    end;
+   end;
+   case fBufferStreamingMode of
+    TBufferStreamingMode.Direct:begin
+     fGlobalLODInfoBuffer.UpdateData(fGlobalLODInfoDynamicArray.ItemArray[0],
+                                     0,
+                                     fGlobalLODInfoDynamicArray.Count*TpvInt64(SizeOf(TGPULODInfo)),
+                                     FlushUpdateData
+                                    );
+    end;
     TBufferStreamingMode.Staging:begin
      fVulkanDevice.MemoryStaging.Upload(fVulkanStagingQueue,
                                         fVulkanStagingCommandBuffer,
                                         fVulkanStagingFence,
-                                        fGlobalVulkanDrawInfoDynamicArrays[aInFlightFrameIndex].ItemArray[0],
-                                        fGlobalVulkanDrawInfoBuffers[aInFlightFrameIndex],
+                                        fGlobalLODInfoDynamicArray.ItemArray[0],
+                                        fGlobalLODInfoBuffer,
                                         0,
-                                        fGlobalVulkanDrawInfoDynamicArrays[aInFlightFrameIndex].Count*SizeOf(TGPUDrawInfo));
+                                        fGlobalLODInfoDynamicArray.Count*TpvInt64(SizeOf(TGPULODInfo)));
     end;
-
     else begin
      Assert(false);
     end;
-
    end;
+   fLODInfoDataGeneration:=fLODInfoGeneration;
+  end;
+  if fGPULODEnabled and assigned(fGlobalLODInfoBuffer) then begin
+   fGlobalVulkanBDAPointersData[aInFlightFrameIndex].LODInfoDeviceAddress:=fGlobalLODInfoBuffer.DeviceAddress;
+  end;
 
+  // lodNeeded buffer creation (per-IFF, GPU-only, DEVICE_LOCAL)
+  // Sized for nodeMatrices space (not meshObjectID space)
+  fGlobalVulkanBDAPointersData[aInFlightFrameIndex].LODNeededCurrentDeviceAddress:=0;
+  if fGPULODEnabled then begin
+   Size:=Max(1,fVulkanNodeMatricesBufferData[aInFlightFrameIndex].Count)*TpvInt64(SizeOf(TpvUInt32));
+   if (not assigned(fGlobalLODNeededBuffers[aInFlightFrameIndex])) or
+      (fGlobalLODNeededBuffers[aInFlightFrameIndex].Size<Size) then begin
+    FreeAndNil(fGlobalLODNeededBuffers[aInFlightFrameIndex]);
+    Size:=Max(1,fVulkanNodeMatricesBufferData[aInFlightFrameIndex].Count+((fVulkanNodeMatricesBufferData[aInFlightFrameIndex].Count+1) shr 1))*TpvInt64(SizeOf(TpvUInt32));
+    fGlobalLODNeededBuffers[aInFlightFrameIndex]:=TpvVulkanBuffer.Create(fVulkanDevice,
+                                                                          Size,
+                                                                          TVkBufferUsageFlags(VK_BUFFER_USAGE_TRANSFER_DST_BIT) or
+                                                                          TVkBufferUsageFlags(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT) or
+                                                                          TVkBufferUsageFlags(VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT_KHR),
+                                                                          TVkSharingMode(VK_SHARING_MODE_EXCLUSIVE),
+                                                                          [],
+                                                                          0,
+                                                                          TVkMemoryPropertyFlags(VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT),
+                                                                          0,
+                                                                          0,
+                                                                          0,
+                                                                          0,
+                                                                          0,
+                                                                          0,
+                                                                          [TpvVulkanBufferFlag.OwnSingleMemoryChunk,TpvVulkanBufferFlag.DedicatedAllocation],
+                                                                          0,
+                                                                          pvAllocationGroupIDScene3DDynamic,
+                                                                          'TpvScene3D.fGlobalLODNeededBuffers['+IntToStr(aInFlightFrameIndex)+']');
+    fVulkanDevice.DebugUtils.SetObjectName(fGlobalLODNeededBuffers[aInFlightFrameIndex].Handle,VK_OBJECT_TYPE_BUFFER,'TpvScene3D.fGlobalLODNeededBuffers['+IntToStr(aInFlightFrameIndex)+']');
+    fGlobalLODNeededBufferSize:=Size;
+   end;
+   if assigned(fGlobalLODNeededBuffers[aInFlightFrameIndex]) then begin
+    fGlobalVulkanBDAPointersData[aInFlightFrameIndex].LODNeededCurrentDeviceAddress:=fGlobalLODNeededBuffers[aInFlightFrameIndex].DeviceAddress;
+   end;
+  end;
+
+  // LODLevel buffers per RendererInstance per IFF
+  // Sized for nodeMatrices space (same as lodNeeded)
+  if fGPULODEnabled then begin
+   fRendererInstanceLock.Acquire;
+   try
+    for RendererInstanceIndex:=0 to fRendererInstanceList.Count-1 do begin
+     RendererInstance:=TpvScene3DRendererInstance(fRendererInstanceList.Items[RendererInstanceIndex]);
+     Size:=Max(1,fVulkanNodeMatricesBufferData[aInFlightFrameIndex].Count)*TpvInt64(SizeOf(TpvUInt32));
+     if (not assigned(RendererInstance.fLODLevelBuffers[aInFlightFrameIndex])) or
+        (RendererInstance.fLODLevelBuffers[aInFlightFrameIndex].Size<Size) then begin
+      FreeAndNil(RendererInstance.fLODLevelBuffers[aInFlightFrameIndex]);
+      Size:=Max(1,fVulkanNodeMatricesBufferData[aInFlightFrameIndex].Count+((fVulkanNodeMatricesBufferData[aInFlightFrameIndex].Count+1) shr 1))*TpvInt64(SizeOf(TpvUInt32));
+      RendererInstance.fLODLevelBuffers[aInFlightFrameIndex]:=TpvVulkanBuffer.Create(fVulkanDevice,
+                                                                                     Size,
+                                                                                     TVkBufferUsageFlags(VK_BUFFER_USAGE_TRANSFER_DST_BIT) or
+                                                                                     TVkBufferUsageFlags(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT) or
+                                                                                     TVkBufferUsageFlags(VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT_KHR),
+                                                                                     TVkSharingMode(VK_SHARING_MODE_EXCLUSIVE),
+                                                                                     [],
+                                                                                     0,
+                                                                                     TVkMemoryPropertyFlags(VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT),
+                                                                                     0,
+                                                                                     0,
+                                                                                     0,
+                                                                                     0,
+                                                                                     0,
+                                                                                     0,
+                                                                                     [TpvVulkanBufferFlag.OwnSingleMemoryChunk,TpvVulkanBufferFlag.DedicatedAllocation],
+                                                                                     0,
+                                                                                     pvAllocationGroupIDScene3DDynamic,
+                                                                                     'TpvScene3DRendererInstance.fLODLevelBuffers['+IntToStr(RendererInstanceIndex)+']['+IntToStr(aInFlightFrameIndex)+']');
+      fVulkanDevice.DebugUtils.SetObjectName(RendererInstance.fLODLevelBuffers[aInFlightFrameIndex].Handle,VK_OBJECT_TYPE_BUFFER,'TpvScene3DRendererInstance.fLODLevelBuffers['+IntToStr(RendererInstanceIndex)+']['+IntToStr(aInFlightFrameIndex)+']');
+     end;
+    end;
+   finally
+    fRendererInstanceLock.Release;
+   end;
   end;
 
   // Upload global BDA pointers to binding 7 SSBO (48 bytes, always)
@@ -38161,7 +39172,7 @@ procedure TpvScene3D.UpdateCachedVertices(const aPipeline:TpvVulkanPipeline;
                                           const aInFlightFrameIndex:TpvSizeInt;
                                           const aCommandBuffer:TpvVulkanCommandBuffer;
                                           const aPipelineLayout:TpvVulkanPipelineLayout);
-var Index,OtherIndex,Count:TpvSizeInt;
+var Index,OtherIndex,Count,PreviousInFlightFrameIndex:TpvSizeInt;
     Group:TpvScene3D.TGroup;
     Current,Next:PCachedVertexRange;
     BufferMemoryBarriers:array[0..2] of TVkBufferMemoryBarrier;
@@ -38225,6 +39236,25 @@ begin
                                         @fVulkanShortTermDynamicBuffers.fBufferDataArray[aInFlightFrameIndex].fVulkanComputeDescriptorSet.Handle,
                                         0,
                                         nil);
+
+   // Compute previousIFF for 1-frame-delayed lodNeeded read
+   PreviousInFlightFrameIndex:=aInFlightFrameIndex-1;
+   if PreviousInFlightFrameIndex<0 then begin
+    PreviousInFlightFrameIndex:=fCountInFlightFrames-1;
+   end;
+
+   // Set LOD push constants (same for all ranges in this mega-dispatch)
+   // First fCountInFlightFrames frames: transform all (lodNeeded[previousIFF] not yet valid)
+   if (not fGPULODEnabled) or
+      fLODTransformAllLevels or
+      (fLODFrameCounter<fCountInFlightFrames) or
+      (not assigned(fGlobalLODNeededBuffers[PreviousInFlightFrameIndex])) then begin
+    MeshComputeStagePushConstants.LODNeededBDA:=0;
+    MeshComputeStagePushConstants.LODTransformAllLevels:=1;
+   end else begin
+    MeshComputeStagePushConstants.LODNeededBDA:=fGlobalLODNeededBuffers[PreviousInFlightFrameIndex].DeviceAddress;
+    MeshComputeStagePushConstants.LODTransformAllLevels:=0;
+   end;
 
    for Index:=0 to fCachedVertexRanges.Count-1 do begin
 

@@ -684,6 +684,8 @@ begin
 
  fRendererInstance.PrepareFrame(InFlightFrameIndex,pvApplication.DrawFrameCounter);
 
+ fScene3D.FillDrawInfos(InFlightFrameIndex);
+
  TPasMPInterlocked.Write(InFlightFrameState^.Ready,true);
 
  inherited Update(aDeltaTime);

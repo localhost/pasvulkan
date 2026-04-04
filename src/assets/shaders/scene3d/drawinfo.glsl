@@ -40,7 +40,7 @@ layout(buffer_reference, std430, buffer_reference_align = 4) readonly buffer Gen
   uint generations[];
 };
 
-// GlobalBDAPointers - 48 bytes, single instance in SSBO at binding 7
+// GlobalBDAPointers - 64 bytes, single instance in SSBO at binding 7
 // Contains the global buffer device addresses shared by all draws (big-buffer mode).
 // For future per-group buffers, these would move back into DrawInfo or become per-group.
 // Layout (std430):
@@ -49,8 +49,10 @@ layout(buffer_reference, std430, buffer_reference_align = 4) readonly buffer Gen
 //   offset 16: previousCachedVerticesBDA  (uvec2, 8 bytes, velocity)
 //   offset 24: generationBDA              (uvec2, 8 bytes, velocity)
 //   offset 32: previousGenerationBDA      (uvec2, 8 bytes, velocity)
-//   offset 40: _reserved                  (uvec2, 8 bytes, padding)
-// Total: 48 bytes
+//   offset 40: matrixPairBDA              (uvec2, 8 bytes, BDA to MatrixPair buffer)
+//   offset 48: lodInfoBDA                 (uvec2, 8 bytes, BDA to LODInfo buffer)
+//   offset 56: lodNeededCurrentBDA        (uvec2, 8 bytes, BDA to lodNeeded[currentIFF])
+// Total: 64 bytes
 
 struct GlobalBDAPointers {
   uvec2 cachedVerticesBDA;
@@ -58,40 +60,87 @@ struct GlobalBDAPointers {
   uvec2 previousCachedVerticesBDA;
   uvec2 generationBDA;
   uvec2 previousGenerationBDA;
-  uvec2 _reserved;
+  uvec2 matrixPairBDA;
+  uvec2 lodInfoBDA;
+  uvec2 lodNeededCurrentBDA;
 };
 
-// DrawInfo struct - 128 bytes per draw, stored in SSBO at binding 0
-// BDA pointers moved to GlobalBDAPointers at binding 7 (global for big-buffer mode)
-// Matrices stored as mat3x4 (3 columns of vec4 = 48 bytes each) for affine transforms:
-//   Each mat3x4 column stores original_column.xyz with translation component in .w
-//   The implicit 4th row of the affine matrix is always (0, 0, 0, 1)
+// MatrixPair struct - 128 bytes, two full mat4 matrices
+// Stored in a separate BDA buffer, indexed by DrawInfo.matrixID
+// MatrixPair[0] = Identity sentinel (non-instanced draws)
+struct MatrixPair {
+  mat4 modelMatrix;           // 64 bytes - current frame world transform
+  mat4 previousModelMatrix;   // 64 bytes - previous frame (velocity)
+};
+
+// Buffer reference for MatrixPair via BDA
+layout(buffer_reference, std430, buffer_reference_align = 16) readonly buffer MatrixPairBuffer {
+  MatrixPair pairs[];
+};
+
+// DrawInfo struct - 32 bytes per draw, stored in SSBO at binding 0
+// Matrices moved to separate MatrixPairBuffer, accessed via matrixID
 // Layout (std430):
-//   offset   0: modelMatrix              (mat3x4, 48 bytes - affine world transform, Identity for pre-transformed)
-//   offset  48: previousModelMatrix      (mat3x4, 48 bytes - previous frame, velocity)
-//   offset  96: instanceDataIndex        (uint, 4 bytes)
-//   offset 100: objectIndex              (uint, 4 bytes)
-//   offset 104: flags                    (uint, 4 bytes)
-//   offset 108: reserved                 (uint, 4 bytes)
-//   offset 112: _padding                 (uvec4, 16 bytes - padding to 128 for power-of-two alignment)
-// Total: 128 bytes
+//   offset   0: matrixID                 (uint, 4 bytes - index into MatrixPairBuffer, 0=Identity)
+//   offset   4: instanceDataIndex        (uint, 4 bytes)
+//   offset   8: meshObjectID             (uint, 4 bytes)
+//   offset  12: flags                    (uint, 4 bytes)
+//   offset  16: _reserved                (uvec4, 16 bytes - padding to 32 for power-of-two alignment)
+// Total: 32 bytes
 
 struct DrawInfo {
-  // BDA pointers commented out - now in GlobalBDAPointers at binding 7
-  // For future per-group buffers, uncomment these and remove from GlobalBDAPointers
-  //uvec2 cachedVerticesBDA;
-  //uvec2 staticVerticesBDA;
-  //uvec2 previousCachedVerticesBDA;
-  //uvec2 generationBDA;
-  //uvec2 previousGenerationBDA;
-  //uvec2 _reserved;
-  mat3x4 modelMatrix;
-  mat3x4 previousModelMatrix;
+  uint matrixID;
   uint instanceDataIndex;
-  uint objectIndex;
+  uint meshObjectID;
   uint flags;
-  uint reserved; 
-  uvec4 _padding;
+  uint nodeMatricesIndex;
+  uint _reserved0;
+  uint _reserved1;
+  uint _reserved2;
+};
+
+// LODInfo struct - 128 bytes per LOD-enabled submesh (5x uvec4 active = 80 bytes, padded to 128)
+// Stores per-LOD geometry data for command-rewriting in mesh_cull.comp
+// countLODs=1 means no LOD (noop), 2..4 means active LOD levels
+// Layout (std430):
+//   offset   0: countLODs     (uint, 4 bytes)
+//   offset   4: reserved0     (uint, 4 bytes)
+//   offset   8: reserved1     (uint, 4 bytes)
+//   offset  12: reserved2     (uint, 4 bytes)
+//   offset  16: thresholds    (vec4, 16 bytes - screenCoverage thresholds)
+//   offset  32: firstIndices  (uvec4, 16 bytes - per LOD level 0..3)
+//   offset  48: countIndices  (uvec4, 16 bytes - per LOD level 0..3)
+//   offset  64: firstVertices (ivec4, 16 bytes - vertexOffset per LOD, signed)
+//   offset  80: padding       (uvec4[3], 48 bytes - padding to 128)
+// Total: 128 bytes
+
+struct LODInfo {
+  uint countLODs;
+  uint reserved0;
+  uint reserved1;
+  uint reserved2;
+  vec4 thresholds;
+  uvec4 firstIndices;
+  uvec4 countIndices;
+  ivec4 firstVertices;
+  uvec4 _padding0;
+  uvec4 _padding1;
+  uvec4 _padding2;
+}; // 128 bytes = 8x vec4
+
+// Buffer reference for LODInfo via BDA
+layout(buffer_reference, std430, buffer_reference_align = 16) readonly buffer LODInfoBuffer {
+  LODInfo items[];
+};
+
+// Buffer reference for lodNeeded (per nodeMatricesIndex, uint32 bitfield)
+layout(buffer_reference, std430, buffer_reference_align = 4) buffer LODNeededBuffer {
+  uint needed[];
+};
+
+// Buffer reference for lodLevel (per nodeMatricesIndex, uint32 LOD level)
+layout(buffer_reference, std430, buffer_reference_align = 4) buffer LODLevelBuffer {
+  uint levels[];
 };
 
 // Reconstruct a full mat4 from a packed mat3x4 affine transform.

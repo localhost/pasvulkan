@@ -270,6 +270,8 @@ type TpvScene3DRendererAntialiasingMode=
       );
      PpvScene3DRendererCullRenderPass=^TpvScene3DRendererCullRenderPass;
 
+     TpvScene3DRendererCullRenderPasses=set of TpvScene3DRendererCullRenderPass;
+
      TpvScene3DRendererRenderPass=
       (
        None=0,
@@ -282,8 +284,23 @@ type TpvScene3DRendererAntialiasingMode=
       );
      PpvScene3DRendererRenderPass=^TpvScene3DRendererRenderPass;
 
+     TpvScene3DRendererRenderPasses=set of TpvScene3DRendererRenderPass;
+
 const TpvScene3DRendererRenderPassFirst=TpvScene3DRendererRenderPass.View;
+
       TpvScene3DRendererRenderPassLast=TpvScene3DRendererRenderPass.Voxelization;
+
+      TpvScene3DRendererAllRenderPasses:TpvScene3DRendererRenderPasses=
+       [
+        TpvScene3DRendererRenderPass.View,
+        TpvScene3DRendererRenderPass.CascadedShadowMap,
+        TpvScene3DRendererRenderPass.ReflectionProbe,
+        TpvScene3DRendererRenderPass.TopDownSkyOcclusionMap,
+        TpvScene3DRendererRenderPass.ReflectiveShadowMap,
+        TpvScene3DRendererRenderPass.Voxelization
+       ];
+
+function pvScene3DRendererRenderPassesToMask(const aPasses:TpvScene3DRendererRenderPasses):TpvUInt32;
 
 var pvScene3DShaderVirtualFileSystem:TpvVirtualFileSystem=nil;
 
@@ -499,6 +516,23 @@ begin
  end else begin
   self:=TpvScene3DRendererAIUpscaleQuality.Low;
  end;
+end;
+
+function pvScene3DRendererRenderPassesToMask(const aPasses:TpvScene3DRendererRenderPasses):TpvUInt32;
+//var RenderPass:TpvScene3DRendererRenderPass;
+begin
+{result:=0;
+ for RenderPass:=Low(TpvScene3DRendererRenderPass) to High(TpvScene3DRendererRenderPass) do begin
+  if RenderPass in aPasses then begin
+   result:=result or (TpvUInt32(1) shl TpvUInt32(ord(RenderPass)));
+  end;
+ end;}
+ result:=TpvUInt32(ord(TpvScene3DRendererRenderPass.View in aPasses) and 1) shl TpvUInt32(ord(TpvScene3DRendererRenderPass.View)) or
+         TpvUInt32(ord(TpvScene3DRendererRenderPass.CascadedShadowMap in aPasses) and 1) shl TpvUInt32(ord(TpvScene3DRendererRenderPass.CascadedShadowMap)) or
+         TpvUInt32(ord(TpvScene3DRendererRenderPass.ReflectionProbe in aPasses) and 1) shl TpvUInt32(ord(TpvScene3DRendererRenderPass.ReflectionProbe)) or
+         TpvUInt32(ord(TpvScene3DRendererRenderPass.TopDownSkyOcclusionMap in aPasses) and 1) shl TpvUInt32(ord(TpvScene3DRendererRenderPass.TopDownSkyOcclusionMap)) or
+         TpvUInt32(ord(TpvScene3DRendererRenderPass.ReflectiveShadowMap in aPasses) and 1) shl TpvUInt32(ord(TpvScene3DRendererRenderPass.ReflectiveShadowMap)) or
+         TpvUInt32(ord(TpvScene3DRendererRenderPass.Voxelization in aPasses) and 1) shl TpvUInt32(ord(TpvScene3DRendererRenderPass.Voxelization));
 end;
 
 initialization

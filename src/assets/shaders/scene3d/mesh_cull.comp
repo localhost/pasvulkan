@@ -27,7 +27,7 @@ struct VkDrawIndexedIndirectCommand {
 
 struct DrawIndexedIndirectCommand {
   uvec4 cmd0; // indexCount_instanceCount_firstIndex_vertexOffset; // x = indexCount, y = instanceCount, z = firstIndex, w = vertexOffset  
-  uvec4 cmd1; // firstInstance_objectIndex_boundingSphereIndex_flags; // x = firstInstance, y = objectIndex, z = boundingSphereIndex, w = flags
+  uvec4 cmd1; // firstInstancemeshObjectID_boundingSphereIndex_flags; // x = firstInstance/meshObjectID, y = boundingSphereIndex, z = lodInfoIndex, w = flags
 }; // 32 bytes per draw indexed indirect command, dividable by 32 bytes for better GPU cache line alignment 
 
 struct BatchRange {
@@ -52,43 +52,61 @@ struct InstanceData {
   uvec4 unused1;
 };
 
+struct View {
+  mat4 viewMatrix;
+  mat4 projectionMatrix;
+  mat4 inverseViewMatrix;
+  mat4 inverseProjectionMatrix;
+};
+
 #if PASS == 0
 
 layout(push_constant) uniform PushConstants {
+  uvec2 lodLevelCurrentBDA;    // BDA to write lodLevel[currentIFF]
+  uvec2 lodLevelPreviousBDA;   // BDA to read lodLevel[previousIFF] for temporal rewrite
   uint countRanges;
   uint totalCommands;
-  uint countObjectIndices;
-  uint skipCulling; // 1u if it is the first frame, if there are sudden complete new views, or if the objectIndices are not valid anymore, 0u otherwise
-  uint batchRangeOffset;  // offset into BatchRanges array for this CullRenderPass
-  uint prefixSumOffset;   // offset into PrefixSums array for this CullRenderPass
+  uint countMeshObjectIDs;
+  uint skipCulling;            // 1u if it is the first frame, if there are sudden complete new views, or if the countMeshObjectIDs are not valid anymore, 0u otherwise
+  uint batchRangeOffset;       // offset into BatchRanges array for this CullRenderPass
+  uint prefixSumOffset;        // offset into PrefixSums array for this CullRenderPass
   uint visibilityBufferOffset; // per-pass constant, differs between pass 0 and pass 1
+  uint renderPassMask;         // bitmask: 1 << ord(RenderPass)
+  uint baseViewIndex;
+  uint countViews;
+  uint rendererInstanceIndex;  // index of current RendererInstance (0..31) for lodNeeded atomicOr
+  uint lodFlags;               // bitmask: LOD_FLAG_ENABLED | LOD_FLAG_TEMPORAL | LOD_FLAG_RESET_FRAME
 } pushConstants;
 
-layout(set = 0, binding = 0, std430) buffer InputDrawIndexedIndirectCommands {
+layout(set = 0, binding = 0, std140) uniform uboViews {
+  View views[256];
+} uView;
+
+layout(set = 0, binding = 1, std430) buffer InputDrawIndexedIndirectCommands {
   DrawIndexedIndirectCommand commands[];
 } inputDrawIndexedIndirectCommands;
 
-layout(set = 0, binding = 1, std430) readonly buffer InputVisiblityBuffer { // from previous frame
+layout(set = 0, binding = 2, std430) readonly buffer InputVisiblityBuffer { // from previous frame
   uint bitmap[];
 } inputVisibilityBuffer;
 
-layout(set = 0, binding = 2, std430) buffer OutputDrawIndexedIndirectCommands {
+layout(set = 0, binding = 3, std430) buffer OutputDrawIndexedIndirectCommands {
   DrawIndexedIndirectCommand commands[];
 } outputDrawIndexedIndirectCommands;
 
-layout(set = 0, binding = 3, std430) buffer OutputDrawIndexedIndirectCommandCounts {
+layout(set = 0, binding = 4, std430) buffer OutputDrawIndexedIndirectCommandCounts {
   uint counts[];
 } outputDrawIndexedIndirectCommandCounts;
 
-layout(set = 0, binding = 4, std430) readonly buffer BatchRangesBuffer {
+layout(set = 0, binding = 5, std430) readonly buffer BatchRangesBuffer {
   BatchRange ranges[];
 } batchRanges;
 
-layout(set = 0, binding = 5, std430) readonly buffer PrefixSumsBuffer {
+layout(set = 0, binding = 6, std430) readonly buffer PrefixSumsBuffer {
   uint sums[];
 } prefixSums;
 
-// Global descriptor set for DrawInfo + InstanceData access
+// Global descriptor set for DrawInfo + InstanceData + GlobalBDAPointers access
 #include "drawinfo.glsl"
 
 layout(set = 1, binding = 0, std430) readonly buffer DrawInfoBuffer {
@@ -99,27 +117,34 @@ layout(set = 1, binding = 6, std430) readonly buffer InstanceDataBuffer {
   InstanceData instanceDataItems[];
 };
 
+layout(set = 1, binding = 7, std430) readonly buffer GlobalBDAPointersBuffer {
+  GlobalBDAPointers globalBDAPointers;
+};
+
+// Bounding sphere descriptor set
+layout(set = 2, binding = 0, std430) readonly buffer BoundingSpheres {
+  vec4 boundingSpheres[];
+} boundingSphereBuffer;
+
 #else // PASS == 1
 
 layout(push_constant) uniform PushConstants {
+  uvec2 lodLevelCurrentBDA;    // BDA to write lodLevel[currentIFF]
+  uvec2 lodLevelPreviousBDA;   // BDA to read lodLevel[previousIFF] for temporal rewrite
   uint countRanges;
   uint totalCommands;
-  uint countObjectIndices;
-  uint skipCulling; // 1u if it is the first frame, if there are sudden complete new views, or if the objectIndices are not valid anymore, 0u otherwise
-  uint batchRangeOffset;  // offset into BatchRanges array for this CullRenderPass
-  uint prefixSumOffset;   // offset into PrefixSums array for this CullRenderPass
+  uint countMeshObjectIDs;
+  uint skipCulling;            // 1u if it is the first frame, if there are sudden complete new views, or if the objectIndices are not valid anymore, 0u otherwise
+  uint batchRangeOffset;       // offset into BatchRanges array for this CullRenderPass
+  uint prefixSumOffset;        // offset into PrefixSums array for this CullRenderPass
   uint visibilityBufferOffset; // per-pass constant, differs between pass 0 and pass 1
   uint textureDepthIndex;
   uint baseViewIndex;
   uint countViews;
+  uint renderPassMask;         // bitmask: 1 << ord(RenderPass)
+  uint rendererInstanceIndex;  // index of current RendererInstance (0..31) for lodNeeded atomicOr
+  uint lodFlags;               // bitmask: LOD_FLAG_ENABLED | LOD_FLAG_TEMPORAL | LOD_FLAG_RESET_FRAME
 } pushConstants;
-
-struct View {
-  mat4 viewMatrix;
-  mat4 projectionMatrix;
-  mat4 inverseViewMatrix;
-  mat4 inverseProjectionMatrix;
-};
 
 layout(set = 0, binding = 0, std140) uniform uboViews {
   View views[256]; // 65536 / (64 * 4) = 256 views as maximum for a single renderer instance (but a application/game can have multiple renderer instances for the same scene)  
@@ -151,7 +176,7 @@ layout(set = 0, binding = 7, std430) readonly buffer PrefixSumsBuffer {
   uint sums[];
 } prefixSums;
 
-// Global descriptor set
+// Global descriptor set for DrawInfo + InstanceData + GlobalBDAPointers access
 #include "drawinfo.glsl"
 
 layout(set = 1, binding = 0, std430) readonly buffer DrawInfoBuffer {
@@ -162,25 +187,16 @@ layout(set = 1, binding = 6, std430) readonly buffer InstanceDataBuffer {
   InstanceData instanceDataItems[];
 };
 
+layout(set = 1, binding = 7, std430) readonly buffer GlobalBDAPointersBuffer {
+  GlobalBDAPointers globalBDAPointers;
+};
+
 // Bounding sphere descriptor set
 layout(set = 2, binding = 0, std430) readonly buffer BoundingSpheres {
   vec4 boundingSpheres[]; // xyz = center, w = radius
 } boundingSphereBuffer;
 
 #include "frustum.glsl"
-
-#include "projectsphere.glsl"
-
-vec4 sphereTransform(const in vec4 sphere, const in mat4 transform){
-  return vec4(
-    (transform * vec4(sphere.xyz, 1.0)).xyz, 
-    max(
-      // We are conservative here, so don't scale smaller than the original sphere radius for to be sure that the object is not culled away as a false positive
-      sphere.w * max(1.0, sqrt(max(max(dot(transform[0].xyz, transform[0].xyz), dot(transform[1].xyz, transform[1].xyz)), dot(transform[2].xyz, transform[2].xyz)))),
-      0.0
-    )
-  );
-}
 
 // The following variables are shared between all invocations of this shader for too keep the pre-calculations needed for the culling small, which
 // are valid and the same for all invocations anyway. Other implementations uses CPU pre-calculations for it, but this is a more simple and straight 
@@ -194,6 +210,18 @@ shared float zNears[8];
 shared Frustum frustums[8];
 
 #endif
+
+#include "projectsphere.glsl"
+
+vec4 sphereTransform(const in vec4 sphere, const in mat4 transform){
+  return vec4(
+    (transform * vec4(sphere.xyz, 1.0)).xyz, 
+    max(
+      sphere.w * max(1.0, sqrt(max(max(dot(transform[0].xyz, transform[0].xyz), dot(transform[1].xyz, transform[1].xyz)), dot(transform[2].xyz, transform[2].xyz)))),
+      0.0
+    )
+  );
+}
 
 // Binary search: find the batch range index for a given global invocation index
 // prefixSums.sums[i] contains the cumulative command count up to (but not including) range i
@@ -211,6 +239,89 @@ uint findRangeIndex(uint globalIndex){
     }
   }
   return lo;
+}
+
+const uint LOD_FLAG_ENABLED = 1u << 0;     // LOD selection + command-rewrite active
+const uint LOD_FLAG_TEMPORAL = 1u << 1;    // temporal 1-frame-lag mode (writes lodNeeded/lodLevel, defers rewrite on reset)
+const uint LOD_FLAG_RESET_FRAME = 1u << 2; // first frames / camera teleport: in temporal mode, skip command-rewrite
+
+void applyLOD(inout uvec4 cmd0, uint lodInfoIndex, uint boundingSphereIndex, uint meshObjectID){
+
+  // Only apply LOD if the buffer with LODInfo is valid (non-zero BDA)
+  if(!all(equal(globalBDAPointers.lodInfoBDA, uvec2(0u)))){
+
+    // Mark this node as needed via atomicOr (even for non-LOD nodes),
+    // so mesh.comp knows which vertices to transform.
+    // Only in temporal mode, since in immediate mode mesh.comp
+    // transforms all vertices anyway and doesn't read lodNeeded.
+    uint nodeMatricesIndex = drawInfoItems[meshObjectID].nodeMatricesIndex;
+    if(((pushConstants.lodFlags & LOD_FLAG_TEMPORAL) != 0u) && (nodeMatricesIndex != 0u) && !all(equal(globalBDAPointers.lodNeededCurrentBDA, uvec2(0u)))){
+      LODNeededBuffer lodNeededBuffer = LODNeededBuffer(globalBDAPointers.lodNeededCurrentBDA);
+      atomicOr(lodNeededBuffer.needed[nodeMatricesIndex], 1u << pushConstants.rendererInstanceIndex);
+    }
+
+    // LOD selection + command-rewrite only when LOD is enabled (not shadow passes)
+    if(((pushConstants.lodFlags & LOD_FLAG_ENABLED) != 0u) && (lodInfoIndex != 0xffffffffu)){
+
+      LODInfoBuffer lodInfoBuffer = LODInfoBuffer(globalBDAPointers.lodInfoBDA);
+      LODInfo lodInfo = lodInfoBuffer.items[lodInfoIndex];
+      if(lodInfo.countLODs > 1u){
+
+        float screenCoverage = 1.0;
+        vec4 boundingSphere = boundingSphereBuffer.boundingSpheres[boundingSphereIndex];
+        if((boundingSphere.w > 0.0) && (cmd0.y == 1u)){
+          MatrixPairBuffer matrixPairBuffer = MatrixPairBuffer(globalBDAPointers.matrixPairBDA);
+          boundingSphere = sphereTransform(boundingSphere, matrixPairBuffer.pairs[drawInfoItems[meshObjectID].matrixID].modelMatrix);
+          uint countViews = min(pushConstants.countViews, 8u);
+          for(uint viewIndex = 0u; viewIndex < countViews; viewIndex++){
+            vec4 viewSpaceSphere = vec4((uView.views[pushConstants.baseViewIndex + viewIndex].viewMatrix * vec4(boundingSphere.xyz, 1.0)).xyz, boundingSphere.w);
+            float zNear = abs(uView.views[pushConstants.baseViewIndex + viewIndex].inverseProjectionMatrix[3][2] / uView.views[pushConstants.baseViewIndex + viewIndex].inverseProjectionMatrix[2][3]);
+            vec4 aabb;
+            if(projectSphere(viewSpaceSphere.xyz, viewSpaceSphere.w, zNear, uView.views[pushConstants.baseViewIndex + viewIndex].projectionMatrix, aabb, true)){
+              vec2 size = aabb.zw - aabb.xy;
+              screenCoverage = min(screenCoverage, max(size.x, size.y));
+            }
+          }
+
+          // Select LOD level based on screen coverage thresholds                        
+          uvec4 selectedLODMask = uvec4(lessThan(vec4(screenCoverage), lodInfo.thresholds));
+          uint selectedLOD = selectedLODMask.x + selectedLODMask.y + selectedLODMask.z + selectedLODMask.w;
+
+          // Write LODLevel for next frame (only in temporal mode, buffer must be valid)      
+          if(((pushConstants.lodFlags & LOD_FLAG_TEMPORAL) != 0u) && !all(equal(pushConstants.lodLevelCurrentBDA, uvec2(0u)))){
+            LODLevelBuffer lodLevelBuffer = LODLevelBuffer(pushConstants.lodLevelCurrentBDA);
+            lodLevelBuffer.levels[nodeMatricesIndex] = selectedLOD;
+          }
+
+          // Command-rewrite:
+          // - Immediate mode: always rewrite with freshly computed selectedLOD
+          // - Temporal + reset frame: rewrite with LOD 0 (safe default for first frames / camera teleport)
+          // - Temporal + not reset: rewrite with previous frame's lodLevel (1-frame-lag)
+          uint rewriteLOD = ((pushConstants.lodFlags & LOD_FLAG_TEMPORAL) != 0u) 
+                              ? (
+                                  ((pushConstants.lodFlags & LOD_FLAG_RESET_FRAME) != 0u) 
+                                    ? 0u 
+                                    : (
+                                        all(equal(pushConstants.lodLevelPreviousBDA, uvec2(0u))) 
+                                        ? 0u 
+                                        : min(LODLevelBuffer(pushConstants.lodLevelPreviousBDA).levels[nodeMatricesIndex], lodInfo.countLODs - 1u)
+                                      )
+                                ) 
+                              : selectedLOD; // default to LOD 0 for temporal mode, may be overwritten by the following conditions
+          if(rewriteLOD != 0xffffffffu){ 
+            cmd0.xzw = uvec3(uint(lodInfo.countIndices[rewriteLOD]), uint(lodInfo.firstIndices[rewriteLOD]), uint(lodInfo.firstVertices[rewriteLOD]));
+          } else {
+            // Invalid LOD index, likely due to invalid or missing LOD data, so skip rewriting and just render with the original command parameters as a fallback
+          }
+
+        }
+
+      }
+
+    }
+
+  }
+
 }
 
 void main(){
@@ -234,23 +345,33 @@ void main(){
 
   uint sourceIndex = baseCommandIndex + localIndex;
 
-  const uvec4 cmd0 = inputDrawIndexedIndirectCommands.commands[sourceIndex].cmd0;
+  uvec4 cmd0 = inputDrawIndexedIndirectCommands.commands[sourceIndex].cmd0;
   uvec4 cmd1 = inputDrawIndexedIndirectCommands.commands[sourceIndex].cmd1;
 
+  const uint meshObjectID = cmd1.x;
+
+  // RenderPassMask filter: skip if this draw is not visible in the current render pass
+  if((drawInfoItems[meshObjectID].flags & pushConstants.renderPassMask) == 0u){
+    return;
+  }
+
   if((pushConstants.skipCulling == 0u) &&  // If it is the first frame or the like, just don't cull anything
-     ((cmd1.y < pushConstants.countObjectIndices) && // Check if the object index is in the valid range, since
-                                                     // new drawIndexedIndirectCommands may have been added 
-                                                     // with a higher object index than the current 
-                                                     // countObjectIndices in contrast to the previous frame
-      ((inputVisibilityBuffer.bitmap[visibilityBufferOffset + (cmd1.y >> 5u)] & (1u << (cmd1.y & 31u))) == 0u))){
+     ((meshObjectID < pushConstants.countMeshObjectIDs) && // Check if the mesh object ID is in the valid range, since
+                                                           // new drawIndexedIndirectCommands may have been added 
+                                                           // with a higher mesh object ID than the current 
+                                                           // countMeshObjectIDs in contrast to the previous frame
+      ((inputVisibilityBuffer.bitmap[visibilityBufferOffset + (meshObjectID >> 5u)] & (1u << (meshObjectID & 31u))) == 0u))){
     // Skip, since it was not visible in the previous frame    
     return; 
   }
 
+  // LOD selection: rewrite command geometry based on screen coverage
+  applyLOD(cmd0, cmd1.z, cmd1.y, meshObjectID);
+
   {
     // Check for instance effects (dissolve/dithered transparency) by reading directly from InstanceData SSBO
     // instead of relying on CPU-baked flags. This allows the commands to be persistent/cached.
-    uint instanceDataIndex = drawInfoItems[cmd1.y].instanceDataIndex;
+    uint instanceDataIndex = drawInfoItems[meshObjectID].instanceDataIndex;
     if(instanceDataIndex > 0u){
       float dissolve = uintBitsToFloat(instanceDataItems[instanceDataIndex].SelectedDissolveDitheredTransparencyFlags.y);
       float ditheredTransparency = uintBitsToFloat(instanceDataItems[instanceDataIndex].SelectedDissolveDitheredTransparencyFlags.z);
@@ -336,11 +457,18 @@ void main(){
 
   bool isDrawIndexedIndirectCommandVisible = false;
 
-  const uvec4 cmd0 = inputDrawIndexedIndirectCommands.commands[sourceIndex].cmd0;
+  uvec4 cmd0 = inputDrawIndexedIndirectCommands.commands[sourceIndex].cmd0;
 
   const uvec4 cmd1 = inputDrawIndexedIndirectCommands.commands[sourceIndex].cmd1;
 
-  vec4 boundingSphere = boundingSphereBuffer.boundingSpheres[cmd1.z];
+  const uint meshObjectID = cmd1.x;
+
+  // RenderPassMask filter: skip if this draw is not visible in the current render pass
+  if((drawInfoItems[meshObjectID].flags & pushConstants.renderPassMask) == 0u){
+    return;
+  }
+
+  vec4 boundingSphere = boundingSphereBuffer.boundingSpheres[cmd1.y];
 
   vec4 screenSpaceAABB = vec4(-2.0); // out of screen space, so that it is always culled away 
 
@@ -349,10 +477,11 @@ void main(){
   // the bounding sphere is not valid for all instances.
   if((boundingSphere.w > 0.0) && (pushConstants.skipCulling == 0u) && (cmd0.y == 1u)){
 
-    // Transform bounding sphere by model matrix from DrawInfo.
-    // For pre-transformed meshes: modelMatrix = Identity => no-op (sphere unchanged).
-    // For instanced meshes: modelMatrix = world transform => sphere in world space.
-    boundingSphere = sphereTransform(boundingSphere, mat3x4ToMat4(drawInfoItems[cmd1.x].modelMatrix));
+    // Transform bounding sphere by model matrix from MatrixPairBuffer.
+    // For pre-transformed meshes: matrixID=0 => Identity => no-op (sphere unchanged).
+    // For instanced meshes: matrixID points to world transform => sphere in world space.
+    MatrixPairBuffer matrixPairBuffer = MatrixPairBuffer(globalBDAPointers.matrixPairBDA);
+    boundingSphere = sphereTransform(boundingSphere, matrixPairBuffer.pairs[drawInfoItems[meshObjectID].matrixID].modelMatrix);
  
     vec2 viewPortSize = vec2(textureSize(uTextureDepths[nonuniformEXT(pushConstants.textureDepthIndex)], 0).xy);
     int countLODLevels = textureQueryLevels(uTextureDepths[nonuniformEXT(pushConstants.textureDepthIndex)]);
@@ -425,14 +554,15 @@ void main(){
     return;
   }
 
-  const uint objectIndex = cmd1.y;
+  // LOD selection: rewrite command geometry based on screen coverage
+  applyLOD(cmd0, cmd1.z, cmd1.y, meshObjectID);
   
   // Mark as visible in any case, independently of being already added in the previous pass 
-  atomicOr(outputVisiblityBuffer.bitmap[visibilityBufferOffset + (cmd1.y >> 5u)], 1u << (cmd1.y & 31u)); 
+  atomicOr(outputVisiblityBuffer.bitmap[visibilityBufferOffset + (meshObjectID >> 5u)], 1u << (meshObjectID & 31u)); 
 
   // Check for instance effects (dissolve/dithered transparency) and route to OIT if needed
   {
-    uint instanceDataIndex = drawInfoItems[cmd1.y].instanceDataIndex;
+    uint instanceDataIndex = drawInfoItems[meshObjectID].instanceDataIndex;
     if(instanceDataIndex > 0u){
       float dissolve = uintBitsToFloat(instanceDataItems[instanceDataIndex].SelectedDissolveDitheredTransparencyFlags.y);
       float ditheredTransparency = uintBitsToFloat(instanceDataItems[instanceDataIndex].SelectedDissolveDitheredTransparencyFlags.z);

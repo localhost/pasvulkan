@@ -3,14 +3,23 @@
 #extension GL_ARB_separate_shader_objects : enable
 #extension GL_ARB_shading_language_420pack : enable
 #extension GL_GOOGLE_include_directive : enable
+#extension GL_EXT_buffer_reference2 : enable
+#extension GL_EXT_buffer_reference_uvec2 : enable
 
 /* clang-format off */
 
 layout(local_size_x = 128, local_size_y = 1, local_size_z = 1) in;
 
+// Buffer reference for lodNeeded (per nodeMatricesIndex, uint32 bitfield)
+layout(buffer_reference, std430, buffer_reference_align = 4) readonly buffer LODNeededBuffer {
+  uint needed[];
+};
+
 layout(push_constant) uniform PushConstants {
   uint indexOffset;
   uint countIndices;
+  uvec2 lodNeededBDA; // BDA to lodNeeded[previousIFF] for 1-frame-delayed vertex skip
+  uint lodTransformAllLevels; // 0 = Option B (skip if lodNeeded==0), 1 = Option A (transform all)
 } pushConstants;
 
 struct InPackedVertex {
@@ -153,7 +162,16 @@ void main(){
       const uint inFlags = inPackedVertex.normalTangentFlagsGeneration.z;
       const uint inGeneration = inPackedVertex.normalTangentFlagsGeneration.w;
 
-     vec3 position = inPosition;
+      // LOD vertex-skip: only for vertices with LOD data (bit 1 set in inFlags),
+      // skip if no RendererInstance needs this node
+      if(((inFlags & (1u << 1)) != 0u) && (pushConstants.lodTransformAllLevels == 0u) && !all(equal(pushConstants.lodNeededBDA, uvec2(0u)))){ 
+        LODNeededBuffer lodNeededBuffer = LODNeededBuffer(pushConstants.lodNeededBDA);
+        if(lodNeededBuffer.needed[inNodeIndex] == 0u){
+          return;
+        }
+      }
+
+      vec3 position = inPosition;
 
       // Decode tangent space
       mat3 tangentSpace;

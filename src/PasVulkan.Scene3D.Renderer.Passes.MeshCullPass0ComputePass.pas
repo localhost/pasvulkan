@@ -81,13 +81,20 @@ type { TpvScene3DRendererPassesMeshCullPass0ComputePass }
      TpvScene3DRendererPassesMeshCullPass0ComputePass=class(TpvFrameGraph.TComputePass)
       public
        type TPushConstants=packed record
+             LODLevelCurrentBDA:TVkDeviceAddress;
+             LODLevelPreviousBDA:TVkDeviceAddress;
              CountRanges:TpvUInt32;
              TotalCommands:TpvUInt32;
-             CountObjectIndices:TpvUInt32;
+             CountMeshObjectIDs:TpvUInt32;
              SkipCulling:TpvUInt32;
              BatchRangeOffset:TpvUInt32;
              PrefixSumOffset:TpvUInt32;
              VisibilityBufferOffset:TpvUInt32;
+             RenderPassMask:TpvUInt32;
+             BaseViewIndex:TpvUInt32;
+             CountViews:TpvUInt32;
+             RendererInstanceIndex:TpvUInt32;
+             LODFlags:TpvUInt32;
             end;
             PPushConstants=^TPushConstants;
             TMeshCullResetPushConstants=packed record
@@ -198,6 +205,7 @@ begin
  fPipelineLayout.AddPushConstantRange(TVkShaderStageFlags(VK_SHADER_STAGE_COMPUTE_BIT),0,SizeOf(TpvScene3DRendererPassesMeshCullPass0ComputePass.TPushConstants));
  fPipelineLayout.AddDescriptorSetLayout(fInstance.MeshCullPass0ComputeVulkanDescriptorSetLayout);
  fPipelineLayout.AddDescriptorSetLayout(fInstance.Scene3D.GlobalVulkanDescriptorSetLayout);
+ fPipelineLayout.AddDescriptorSetLayout(fInstance.Scene3D.GlobalBoundingSphereVulkanDescriptorSetLayout);
  fPipelineLayout.Initialize;
 
  fInstance.Renderer.VulkanDevice.DebugUtils.SetObjectName(fPipelineLayout.Handle,VK_OBJECT_TYPE_PIPELINE_LAYOUT,'TpvScene3DRendererPassesMeshCullPass0ComputePass.fPipelineLayout');
@@ -239,7 +247,7 @@ var RenderPass:TpvScene3DRendererRenderPass;
     BufferMemoryBarriers:array[0..3] of TVkBufferMemoryBarrier;
     PushConstants:TpvScene3DRendererPassesMeshCullPass0ComputePass.TPushConstants;
     ResetPushConstants:TMeshCullResetPushConstants;
-    DescriptorSets:array[0..1] of TVkDescriptorSet;
+    DescriptorSets:array[0..2] of TVkDescriptorSet;
     CountRanges,TotalCommands:TpvUInt32;
 begin
 
@@ -381,11 +389,12 @@ begin
 
   DescriptorSets[0]:=fInstance.MeshCullPass0ComputeVulkanDescriptorSets[aInFlightFrameIndex].Handle;
   DescriptorSets[1]:=fInstance.Scene3D.GlobalVulkanDescriptorSets[aInFlightFrameIndex].Handle;
+  DescriptorSets[2]:=fInstance.Scene3D.GlobalBoundingSphereVulkanDescriptorSets[aInFlightFrameIndex].Handle;
 
   aCommandBuffer.CmdBindDescriptorSets(VK_PIPELINE_BIND_POINT_COMPUTE,
                                        fPipelineLayout.Handle,
                                        0,
-                                       2,
+                                       3,
                                        @DescriptorSets[0],
                                        0,
                                        nil);
@@ -399,13 +408,63 @@ begin
 
     PushConstants.CountRanges:=CountRanges;
     PushConstants.TotalCommands:=TotalCommands;
-    PushConstants.CountObjectIndices:=fInstance.PerInFlightFrameGPUCountObjectIndicesArray[PreviousInFlightFrameIndex];
+    PushConstants.CountMeshObjectIDs:=fInstance.PerInFlightFrameGPUCountMeshObjectIDsArray[PreviousInFlightFrameIndex];
     PushConstants.SkipCulling:=IfThen((aFrameIndex=0) or
                                       fInstance.InFlightFrameStates[aInFlightFrameIndex].CameraReset or
-                                      (fInstance.PerInFlightFrameGPUCountObjectIndicesArray[PreviousInFlightFrameIndex]=0),1,0);
+                                      (fInstance.PerInFlightFrameGPUCountMeshObjectIDsArray[PreviousInFlightFrameIndex]=0),1,0);
     PushConstants.BatchRangeOffset:=fInstance.PerInFlightFrameMeshCullBatchRangeOffsets[aInFlightFrameIndex,fCullRenderPass];
     PushConstants.PrefixSumOffset:=fInstance.PerInFlightFrameMeshCullPrefixSumOffsets[aInFlightFrameIndex,fCullRenderPass];
     PushConstants.VisibilityBufferOffset:=fInstance.PerInFlightFrameGPUDrawIndexedIndirectCommandVisibilityBufferPartSizes[PreviousInFlightFrameIndex]*TpvUInt32(Part);
+
+    case fCullRenderPass of
+     TpvScene3DRendererCullRenderPass.FinalView:begin
+      PushConstants.BaseViewIndex:=fInstance.InFlightFrameStates^[aInFlightFrameIndex].FinalViewIndex;
+      PushConstants.CountViews:=fInstance.InFlightFrameStates^[aInFlightFrameIndex].CountFinalViews;
+      PushConstants.RenderPassMask:=TpvUInt32(1) shl TpvUInt32(ord(TpvScene3DRendererRenderPass.View));
+     end;
+     TpvScene3DRendererCullRenderPass.CascadedShadowMap:begin
+      PushConstants.BaseViewIndex:=fInstance.InFlightFrameStates^[aInFlightFrameIndex].CascadedShadowMapViewIndex;
+      PushConstants.CountViews:=fInstance.InFlightFrameStates^[aInFlightFrameIndex].CountCascadedShadowMapViews;
+      PushConstants.RenderPassMask:=TpvUInt32(1) shl TpvUInt32(ord(TpvScene3DRendererRenderPass.CascadedShadowMap));
+     end;
+     else begin
+      PushConstants.BaseViewIndex:=0;
+      PushConstants.CountViews:=0;
+      PushConstants.RenderPassMask:=$ffff;
+     end;
+    end;
+
+    PushConstants.RendererInstanceIndex:=TpvUInt32(fInstance.RendererInstanceIndex);
+    PushConstants.LODFlags:=0;
+    if fInstance.Scene3D.GPULODEnabled then begin
+     case fCullRenderPass of
+      TpvScene3DRendererCullRenderPass.FinalView:begin
+       PushConstants.LODFlags:=PushConstants.LODFlags or TpvUInt32(1 shl 0); // LOD_FLAG_ENABLED
+      end;
+      else begin
+       // LOD selection only for final view pass for now
+      end;
+     end;
+     if not fInstance.Scene3D.LODTransformAllLevels then begin
+      PushConstants.LODFlags:=PushConstants.LODFlags or TpvUInt32(1 shl 1); // LOD_FLAG_TEMPORAL
+     end;
+     if fInstance.Scene3D.LODFrameCounter<fInstance.Scene3D.CountInFlightFrames then begin
+      PushConstants.LODFlags:=PushConstants.LODFlags or TpvUInt32(1 shl 2); // LOD_FLAG_RESET_FRAME
+     end;
+     if assigned(fInstance.LODLevelBuffers[aInFlightFrameIndex]) then begin
+      PushConstants.LODLevelCurrentBDA:=fInstance.LODLevelBuffers[aInFlightFrameIndex].DeviceAddress;
+     end else begin
+      PushConstants.LODLevelCurrentBDA:=0;
+     end;
+     if assigned(fInstance.LODLevelBuffers[PreviousInFlightFrameIndex]) then begin
+      PushConstants.LODLevelPreviousBDA:=fInstance.LODLevelBuffers[PreviousInFlightFrameIndex].DeviceAddress;
+     end else begin
+      PushConstants.LODLevelPreviousBDA:=0;
+     end;
+    end else begin 
+     PushConstants.LODLevelCurrentBDA:=0;
+     PushConstants.LODLevelPreviousBDA:=0;
+    end;
 
     aCommandBuffer.CmdPushConstants(fPipelineLayout.Handle,
                                     TVkShaderStageFlags(TVkShaderStageFlagBits.VK_SHADER_STAGE_COMPUTE_BIT),

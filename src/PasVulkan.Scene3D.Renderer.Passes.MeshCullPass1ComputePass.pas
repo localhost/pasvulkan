@@ -81,9 +81,11 @@ type { TpvScene3DRendererPassesMeshCullPass1ComputePass }
      TpvScene3DRendererPassesMeshCullPass1ComputePass=class(TpvFrameGraph.TComputePass)
       public
        type TPushConstants=packed record
+             LODLevelCurrentBDA:TVkDeviceAddress;
+             LODLevelPreviousBDA:TVkDeviceAddress;
              CountRanges:TpvUInt32;
              TotalCommands:TpvUInt32;
-             CountObjectIndices:TpvUInt32;
+             CountMeshObjectIDs:TpvUInt32;
              SkipCulling:TpvUInt32;
              BatchRangeOffset:TpvUInt32;
              PrefixSumOffset:TpvUInt32;
@@ -91,6 +93,9 @@ type { TpvScene3DRendererPassesMeshCullPass1ComputePass }
              TextureDepthIndex:TpvUInt32;
              BaseViewIndex:TpvUInt32;
              CountViews:TpvUInt32;
+             RenderPassMask:TpvUInt32;
+             RendererInstanceIndex:TpvUInt32;
+             LODFlags:TpvUInt32;
             end;
             PPushConstants=^TPushConstants;
             TMeshCullResetPushConstants=packed record
@@ -227,6 +232,7 @@ end;
 
 procedure TpvScene3DRendererPassesMeshCullPass1ComputePass.Execute(const aCommandBuffer:TpvVulkanCommandBuffer;const aInFlightFrameIndex,aFrameIndex:TpvSizeInt);
 var RenderPass:TpvScene3DRendererRenderPass;
+    PreviousInFlightFrameIndex,
     Part:TpvSizeInt;
     BufferMemoryBarriers:array[0..3] of TVkBufferMemoryBarrier;
     PushConstants:TpvScene3DRendererPassesMeshCullPass1ComputePass.TPushConstants;
@@ -236,6 +242,8 @@ var RenderPass:TpvScene3DRendererRenderPass;
 begin
 
  inherited Execute(aCommandBuffer,aInFlightFrameIndex,aFrameIndex);
+
+ PreviousInFlightFrameIndex:=FrameGraph.DrawPreviousInFlightFrameIndex;
 
  case fCullRenderPass of
   TpvScene3DRendererCullRenderPass.FinalView:begin
@@ -408,7 +416,7 @@ begin
 
     PushConstants.CountRanges:=CountRanges;
     PushConstants.TotalCommands:=TotalCommands;
-    PushConstants.CountObjectIndices:=fInstance.PerInFlightFrameGPUCountObjectIndicesArray[aInFlightFrameIndex];
+    PushConstants.CountMeshObjectIDs:=fInstance.PerInFlightFrameGPUCountMeshObjectIDsArray[aInFlightFrameIndex];
     PushConstants.SkipCulling:=0;
     PushConstants.BatchRangeOffset:=fInstance.PerInFlightFrameMeshCullBatchRangeOffsets[aInFlightFrameIndex,fCullRenderPass];
     PushConstants.PrefixSumOffset:=fInstance.PerInFlightFrameMeshCullPrefixSumOffsets[aInFlightFrameIndex,fCullRenderPass];
@@ -418,14 +426,49 @@ begin
      TpvScene3DRendererCullRenderPass.FinalView:begin
       PushConstants.BaseViewIndex:=fInstance.InFlightFrameStates^[aInFlightFrameIndex].FinalViewIndex;
       PushConstants.CountViews:=fInstance.InFlightFrameStates^[aInFlightFrameIndex].CountFinalViews;
+      PushConstants.RenderPassMask:=TpvUInt32(1) shl TpvUInt32(ord(TpvScene3DRendererRenderPass.View));
      end;
      TpvScene3DRendererCullRenderPass.CascadedShadowMap:begin
       PushConstants.BaseViewIndex:=fInstance.InFlightFrameStates^[aInFlightFrameIndex].CascadedShadowMapViewIndex;
       PushConstants.CountViews:=fInstance.InFlightFrameStates^[aInFlightFrameIndex].CountCascadedShadowMapViews;
+      PushConstants.RenderPassMask:=TpvUInt32(1) shl TpvUInt32(ord(TpvScene3DRendererRenderPass.CascadedShadowMap));
      end;
      else begin
       Assert(false);
+      PushConstants.RenderPassMask:=$ffff;
      end;
+    end;
+
+    PushConstants.RendererInstanceIndex:=TpvUInt32(fInstance.RendererInstanceIndex);
+    PushConstants.LODFlags:=0;
+    if fInstance.Scene3D.GPULODEnabled then begin
+     case fCullRenderPass of
+      TpvScene3DRendererCullRenderPass.FinalView:begin
+       PushConstants.LODFlags:=PushConstants.LODFlags or TpvUInt32(1 shl 0); // LOD_FLAG_ENABLED
+      end;
+      else begin
+       // LOD selection only for final view pass for now
+      end;
+     end;
+     if not fInstance.Scene3D.LODTransformAllLevels then begin
+      PushConstants.LODFlags:=PushConstants.LODFlags or TpvUInt32(1 shl 1); // LOD_FLAG_TEMPORAL
+     end;
+     if fInstance.Scene3D.LODFrameCounter<fInstance.Scene3D.CountInFlightFrames then begin
+      PushConstants.LODFlags:=PushConstants.LODFlags or TpvUInt32(1 shl 2); // LOD_FLAG_RESET_FRAME
+     end;
+     if assigned(fInstance.LODLevelBuffers[aInFlightFrameIndex]) then begin
+      PushConstants.LODLevelCurrentBDA:=fInstance.LODLevelBuffers[aInFlightFrameIndex].DeviceAddress;
+     end else begin
+      PushConstants.LODLevelCurrentBDA:=0;
+     end;
+     if assigned(fInstance.LODLevelBuffers[PreviousInFlightFrameIndex]) then begin
+      PushConstants.LODLevelPreviousBDA:=fInstance.LODLevelBuffers[PreviousInFlightFrameIndex].DeviceAddress;
+     end else begin
+      PushConstants.LODLevelPreviousBDA:=0;
+     end;
+    end else begin 
+     PushConstants.LODLevelCurrentBDA:=0;
+     PushConstants.LODLevelPreviousBDA:=0;
     end;
 
     aCommandBuffer.CmdPushConstants(fPipelineLayout.Handle,
