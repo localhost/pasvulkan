@@ -1880,6 +1880,8 @@ var LocalFileHeader:TpvArchiveZIPLocalFileHeader;
     ItIsAtEnd:boolean;
     ExtensibleDataFieldHeader:TpvArchiveZIPExtensibleDataFieldHeader;
     ExtensibleInfoFieldHeader:TpvArchiveZIP64ExtensibleInfoFieldHeader;
+    CopyBufSize,CopyRemaining,CopyToDo:TpvInt64;
+    CopyBuf:PpvUInt8Array;
  function Decompress(const InStream,OutStream:TStream):boolean;
  const StatusOk=0;
        StatusCRCErr=-1;
@@ -3851,13 +3853,32 @@ begin
 
     CRC32.Initialize;
 
-    case LocalFileHeader.CompressMethod of
-     0:begin
-      if aStream.CopyFrom(fSourceArchive.fStream,CompressedSize)<>CompressedSize then begin
-       raise EpvArchiveZIP.Create('Read error');
+     case LocalFileHeader.CompressMethod of
+      0:begin
+       CopyBufSize:=65536;
+       if CopyBufSize>CompressedSize then begin
+        CopyBufSize:=CompressedSize;
+       end;
+       GetMem(CopyBuf,CopyBufSize);
+       try
+        CopyRemaining:=CompressedSize;
+        while CopyRemaining>0 do begin
+         if CopyRemaining<CopyBufSize then begin
+          CopyToDo:=CopyRemaining;
+         end else begin
+          CopyToDo:=CopyBufSize;
+         end;
+         if fSourceArchive.fStream.Read(CopyBuf^,CopyToDo)<>CopyToDo then begin
+          raise EpvArchiveZIP.Create('Read error');
+         end;
+         CRC32.Update(CopyBuf^,CopyToDo);
+         aStream.WriteBuffer(CopyBuf^,CopyToDo);
+         dec(CopyRemaining,CopyToDo);
+        end;
+       finally
+        FreeMem(CopyBuf);
+       end;
       end;
-      CRC32.Update(aStream);
-     end;
      1..6:begin
       if not Decompress(fSourceArchive.fStream,aStream) then begin
        raise EpvArchiveZIP.Create('Decompression failed');
